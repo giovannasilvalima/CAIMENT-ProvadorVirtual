@@ -1,3 +1,4 @@
+
 /*
 ============================================================
 CAIMENT — AvatarViewer
@@ -9,10 +10,10 @@ RESPONSABILIDADES:
 - Ajustar o avatar para 3,4 metros.
 - Extrair landmarks diretamente da geometria do avatar.
 - Recuperar e mapear as âncoras da roupa.
-- Resolver o encaixe inicial considerando a escala uniforme.
-- Aplicar a mesma escala de normalização à roupa.
-- Posicionar a roupa no avatar.
-- Corrigir a folga entre a roupa e a superfície real do avatar.
+- Resolver o encaixe inicial.
+- Aplicar escala uniforme e deformação localizada da roupa.
+- Fazer a roupa acompanhar a curvatura do corpo.
+- Preservar materiais, texturas e cores.
 - Preservar os controles de visualização 3D.
 
 NÃO UTILIZA:
@@ -24,7 +25,6 @@ NÃO UTILIZA:
 - BodyGeometryParameters.
 - ClothSimulation.
 - Shape Keys.
-- GarmentDeformation.ts.
 - GarmentAvatarAlignment.ts.
 
 CONTRATO DE COORDENADAS:
@@ -34,6 +34,10 @@ CONTRATO DE COORDENADAS:
 - Frente = +Z
 - Unidade = metros
 - Origem = centro do chão do avatar
+
+IMPORTANTE:
+fit.clearance é preservado nos metadados.
+A folga não é aplicada como deslocamento dos vértices.
 ============================================================
 */
 
@@ -61,12 +65,13 @@ import type {
 import {
   Box3,
   Group,
+  Mesh,
   Vector3,
 } from 'three';
 
 import type {
+  BufferGeometry,
   Material,
-  Mesh,
   Object3D,
   Texture,
 } from 'three';
@@ -116,6 +121,10 @@ import {
 import {
   positionGarmentGroupOnAvatar,
 } from '@/features/clothing/geometry/GarmentPositioning';
+
+import {
+  applyGarmentDeformation,
+} from '@/features/clothing/geometry/GarmentDeformation';
 
 import type {
   BodyLandmarks,
@@ -169,22 +178,6 @@ interface GarmentMetadata {
 }
 
 // ============================================================
-// RESULTADO DA CORREÇÃO DE FOLGA
-// ============================================================
-
-interface SurfaceClearanceResult {
-  requested: number;
-  scaled: number;
-  adjustedVertices: number;
-  testedVertices: number;
-  intersectedRays: number;
-  cacheHits: number;
-  cacheMisses: number;
-  applied: boolean;
-  durationMs: number;
-}
-
-// ============================================================
 // CONSTANTES
 // ============================================================
 
@@ -211,40 +204,6 @@ const VALID_GARMENT_TYPES: GarmentType[] = [
   'pants',
 ];
 
-const MIN_RADIAL_DISTANCE = 0.0001;
-
-/**
- * Resolução angular do perfil de superfície do avatar.
- *
- * 720 divisões representam intervalos de 0,5 grau.
- */
-const CLEARANCE_ANGLE_DIVISIONS = 720;
-
-/**
- * Quantização vertical do perfil de superfície.
- *
- * Cada "fatia" do perfil cobre aproximadamente 1 cm de altura.
- */
-const CLEARANCE_HEIGHT_STEP = 0.01;
-
-/**
- * Espaçamento máximo (em unidades da cena) entre as amostras
- * geradas dentro de cada triângulo do avatar ao montar o perfil.
- */
-const SURFACE_SAMPLE_SPACING = 0.004;
-
-/**
- * Limite de subdivisões por aresta de triângulo.
- * Protege contra malhas com triângulos gigantes.
- */
-const SURFACE_MAX_TRIANGLE_DIVISIONS = 40;
-
-/**
- * Limite de fatias verticais do perfil (proteção contra
- * caixas delimitadoras inválidas).
- */
-const SURFACE_MAX_HEIGHT_LEVELS = 20000;
-
 // ============================================================
 // LIBERAÇÃO DE RECURSOS THREE.JS
 // ============================================================
@@ -253,34 +212,53 @@ function disposeObject3D(
   object: Object3D,
   disposeTextures = false,
 ): void {
-  const disposedGeometries = new Set<object>();
-  const disposedMaterials = new Set<object>();
-  const disposedTextures = new Set<object>();
+  const disposedGeometries = new Set<BufferGeometry>();
+  const disposedMaterials = new Set<Material>();
+  const disposedTextures = new Set<Texture>();
+
+  const disposeTextureValue = (value: unknown): void => {
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+
+    if ('isTexture' in value && value.isTexture === true) {
+      const texture = value as Texture;
+
+      if (!disposedTextures.has(texture)) {
+        disposedTextures.add(texture);
+        texture.dispose();
+      }
+
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach(disposeTextureValue);
+    }
+  };
 
   object.traverse((child) => {
-    const mesh = child as Mesh;
-
-    if (!mesh.isMesh) {
+    if (!(child instanceof Mesh)) {
       return;
     }
 
     if (
-      mesh.geometry &&
-      !disposedGeometries.has(mesh.geometry)
+      child.geometry &&
+      !disposedGeometries.has(child.geometry)
     ) {
-      disposedGeometries.add(mesh.geometry);
-      mesh.geometry.dispose();
+      disposedGeometries.add(child.geometry);
+      child.geometry.dispose();
     }
 
-    if (!mesh.material) {
+    if (!child.material) {
       return;
     }
 
-    const materials = Array.isArray(mesh.material)
-      ? mesh.material
-      : [mesh.material];
+    const materials = Array.isArray(child.material)
+      ? child.material
+      : [child.material];
 
-    materials.forEach((material: Material) => {
+    materials.forEach((material) => {
       if (disposedMaterials.has(material)) {
         return;
       }
@@ -293,21 +271,9 @@ function disposeObject3D(
           unknown
         >;
 
-        Object.values(materialData).forEach((value) => {
-          if (
-            value &&
-            typeof value === 'object' &&
-            'isTexture' in value &&
-            (value as Texture).isTexture
-          ) {
-            const texture = value as Texture;
-
-            if (!disposedTextures.has(texture)) {
-              disposedTextures.add(texture);
-              texture.dispose();
-            }
-          }
-        });
+        Object.values(materialData).forEach(
+          disposeTextureValue,
+        );
       }
 
       material.dispose();
@@ -319,26 +285,75 @@ function disposeObject3D(
 // CLONAGEM INDEPENDENTE DE OBJETOS
 // ============================================================
 
+/**
+ * Clona hierarquia, geometrias e materiais.
+ *
+ * As texturas são compartilhadas porque não são modificadas
+ * durante a visualização.
+ *
+ * Cores, mapas, roughness, metalness, transparência e demais
+ * propriedades dos materiais são preservados.
+ */
 function cloneObjectWithResources(
   source: Object3D,
 ): Object3D {
   const clone = source.clone(true);
 
-  clone.traverse((child) => {
-    const mesh = child as Mesh;
+  const geometryClones = new Map<
+    BufferGeometry,
+    BufferGeometry
+  >();
 
-    if (!mesh.isMesh) {
+  const materialClones = new Map<
+    Material,
+    Material
+  >();
+
+  const cloneGeometry = (
+    geometry: BufferGeometry,
+  ): BufferGeometry => {
+    const existing = geometryClones.get(geometry);
+
+    if (existing) {
+      return existing;
+    }
+
+    const cloned = geometry.clone();
+
+    geometryClones.set(geometry, cloned);
+
+    return cloned;
+  };
+
+  const cloneMaterial = (
+    material: Material,
+  ): Material => {
+    const existing = materialClones.get(material);
+
+    if (existing) {
+      return existing;
+    }
+
+    const cloned = material.clone();
+
+    materialClones.set(material, cloned);
+
+    return cloned;
+  };
+
+  clone.traverse((child) => {
+    if (!(child instanceof Mesh)) {
       return;
     }
 
-    if (mesh.geometry) {
-      mesh.geometry = mesh.geometry.clone();
+    if (child.geometry) {
+      child.geometry = cloneGeometry(child.geometry);
     }
 
-    if (mesh.material) {
-      mesh.material = Array.isArray(mesh.material)
-        ? mesh.material.map((material) => material.clone())
-        : mesh.material.clone();
+    if (child.material) {
+      child.material = Array.isArray(child.material)
+        ? child.material.map(cloneMaterial)
+        : cloneMaterial(child.material);
     }
   });
 
@@ -363,26 +378,12 @@ function prepareObjectForRendering(
   object: Object3D,
 ): void {
   object.traverse((child) => {
-    const mesh = child as Mesh;
-
-    if (!mesh.isMesh) {
+    if (!(child instanceof Mesh)) {
       return;
     }
 
-    mesh.visible = true;
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-
-    if (mesh.material) {
-      const materials = Array.isArray(mesh.material)
-        ? mesh.material
-        : [mesh.material];
-
-      materials.forEach((material) => {
-        material.visible = true;
-        material.needsUpdate = true;
-      });
-    }
+    child.castShadow = false;
+    child.receiveShadow = false;
   });
 }
 
@@ -685,14 +686,21 @@ function getGarmentMetadata(
       );
     }
 
-    const mesh = current as Mesh;
-
-    if (mesh.isMesh && mesh.geometry) {
-      const geometryData = mesh.geometry.userData ?? {};
+    if (
+      current instanceof Mesh &&
+      current.geometry
+    ) {
+      const geometryData = current.geometry.userData ?? {};
 
       if (!fit && geometryData.garmentFit) {
         fit = normalizeGarmentFit(
           geometryData.garmentFit,
+        );
+      }
+
+      if (!fit && geometryData.fit) {
+        fit = normalizeGarmentFit(
+          geometryData.fit,
         );
       }
 
@@ -812,665 +820,165 @@ function createPartialGarmentFit(
 }
 
 // ============================================================
-// MALHA DE SUPERFÍCIE DO AVATAR
+// LOCALIZAÇÃO DA GEOMETRIA DE DEFORMAÇÃO
 // ============================================================
 
 /**
- * Reúne os meshes do avatar uma única vez.
+ * A deformação usa os índices de vértices de fit.regions.
  *
- * Assim, cada interseção não precisa percorrer
- * novamente toda a hierarquia do objeto.
+ * Por isso, não aplicamos o mesmo fit indiscriminadamente
+ * a todos os meshes de um GLTF.
+ *
+ * Quando a roupa possui uma única malha montada, ela é o
+ * alvo da deformação.
+ *
+ * Quando existem várias malhas, só são aceitas aquelas que
+ * possuem seu próprio fit com regiões na geometria.
  */
-function collectAvatarSurfaceMeshes(
-  avatar: Object3D,
+function getDeformationTargets(
+  clothing: Group,
 ): Mesh[] {
   const meshes: Mesh[] = [];
 
-  avatar.traverse((child) => {
-    const mesh = child as Mesh;
-
+  clothing.traverse((child) => {
     if (
-      mesh.isMesh &&
-      mesh.visible &&
-      mesh.geometry
+      child instanceof Mesh &&
+      child.geometry?.attributes.position
     ) {
-      meshes.push(mesh);
+      meshes.push(child);
     }
   });
 
-  return meshes;
-}
-
-// ============================================================
-// PERFIL RADIAL DA SUPERFÍCIE DO AVATAR
-// ============================================================
-
-interface AvatarSurfaceProfile {
-  /** Maior distância radial por (altura, ângulo). -1 = sem dados. */
-  data: Float32Array;
-  minHeightIndex: number;
-  heightLevels: number;
-  filledBins: number;
-}
-
-const avatarSurfaceProfileCache = new WeakMap<
-  Object3D,
-  { key: string; profile: AvatarSurfaceProfile }
->();
-
-function getAvatarSurfaceProfile(
-  avatar: Object3D,
-  avatarMeshes: Mesh[],
-  center: Vector3,
-  box: Box3,
-  angleStep: number,
-): AvatarSurfaceProfile | null {
-  const cacheKey = [
-    center.x,
-    center.z,
-    box.min.y,
-    box.max.y,
-    CLEARANCE_ANGLE_DIVISIONS,
-    CLEARANCE_HEIGHT_STEP,
-  ]
-    .map((value) => value.toFixed(5))
-    .join('|');
-
-  const cached = avatarSurfaceProfileCache.get(avatar);
-
-  if (cached && cached.key === cacheKey) {
-    return cached.profile;
+  if (meshes.length === 1) {
+    return meshes;
   }
 
-  const minHeightIndex =
-    Math.floor(box.min.y / CLEARANCE_HEIGHT_STEP) - 1;
+  return meshes.filter((mesh) => {
+    const geometryData = mesh.geometry.userData ?? {};
 
-  const maxHeightIndex =
-    Math.ceil(box.max.y / CLEARANCE_HEIGHT_STEP) + 1;
-
-  const heightLevels =
-    maxHeightIndex - minHeightIndex + 1;
-
-  if (
-    !Number.isFinite(heightLevels) ||
-    heightLevels <= 0 ||
-    heightLevels > SURFACE_MAX_HEIGHT_LEVELS
-  ) {
-    return null;
-  }
-
-  const data = new Float32Array(
-    heightLevels * CLEARANCE_ANGLE_DIVISIONS,
-  ).fill(-1);
-
-  let filledBins = 0;
-
-  const stamp = (
-    x: number,
-    y: number,
-    z: number,
-  ): void => {
-    const dx = x - center.x;
-    const dz = z - center.z;
-    const radius = Math.hypot(dx, dz);
-
-    if (!Number.isFinite(radius) || !Number.isFinite(y)) {
-      return;
-    }
-
-    const row =
-      Math.round(y / CLEARANCE_HEIGHT_STEP) -
-      minHeightIndex;
-
-    if (row < 0 || row >= heightLevels) {
-      return;
-    }
-
-    let angle = Math.atan2(dz, dx);
-
-    if (angle < 0) {
-      angle += Math.PI * 2;
-    }
-
-    const angleIndex =
-      Math.round(angle / angleStep) %
-      CLEARANCE_ANGLE_DIVISIONS;
-
-    const index =
-      row * CLEARANCE_ANGLE_DIVISIONS + angleIndex;
-
-    const current = data[index] ?? -1;
-
-    if (current < 0) {
-      filledBins++;
-    }
-
-    if (radius > current) {
-      data[index] = radius;
-    }
-  };
-
-  const vertex = new Vector3();
-
-  for (const mesh of avatarMeshes) {
-    const geometry = mesh.geometry;
-    const position = geometry.getAttribute('position');
-
-    if (!position) {
-      continue;
-    }
-
-    const vertexCount = position.count;
-    const world = new Float32Array(vertexCount * 3);
-
-    for (let i = 0; i < vertexCount; i++) {
-      mesh.getVertexPosition(i, vertex);
-      vertex.applyMatrix4(mesh.matrixWorld);
-
-      world[i * 3] = vertex.x;
-      world[i * 3 + 1] = vertex.y;
-      world[i * 3 + 2] = vertex.z;
-    }
-
-    const index = geometry.getIndex();
-
-    const triangleCount = index
-      ? Math.floor(index.count / 3)
-      : Math.floor(vertexCount / 3);
-
-    for (let t = 0; t < triangleCount; t++) {
-      const a = index ? index.getX(t * 3) : t * 3;
-      const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
-      const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
-
-      const ax = world[a * 3] ?? 0;
-      const ay = world[a * 3 + 1] ?? 0;
-      const az = world[a * 3 + 2] ?? 0;
-
-      const bx = world[b * 3] ?? 0;
-      const by = world[b * 3 + 1] ?? 0;
-      const bz = world[b * 3 + 2] ?? 0;
-
-      const cx = world[c * 3] ?? 0;
-      const cy = world[c * 3 + 1] ?? 0;
-      const cz = world[c * 3 + 2] ?? 0;
-
-      const longestEdge = Math.max(
-        Math.hypot(ax - bx, ay - by, az - bz),
-        Math.hypot(bx - cx, by - cy, bz - cz),
-        Math.hypot(cx - ax, cy - ay, cz - az),
+    const geometryFit =
+      normalizeGarmentFit(
+        geometryData.garmentFit ?? geometryData.fit,
       );
 
-      const divisions = Math.min(
-        SURFACE_MAX_TRIANGLE_DIVISIONS,
-        Math.max(
-          1,
-          Math.ceil(longestEdge / SURFACE_SAMPLE_SPACING),
-        ),
-      );
-
-      for (let i = 0; i <= divisions; i++) {
-        for (let j = 0; j <= divisions - i; j++) {
-          const u = i / divisions;
-          const v = j / divisions;
-          const w = 1 - u - v;
-
-          stamp(
-            ax * w + bx * u + cx * v,
-            ay * w + by * u + cy * v,
-            az * w + bz * u + cz * v,
-          );
-        }
-      }
-    }
-  }
-
-  const profile: AvatarSurfaceProfile = {
-    data,
-    minHeightIndex,
-    heightLevels,
-    filledBins,
-  };
-
-  avatarSurfaceProfileCache.set(avatar, {
-    key: cacheKey,
-    profile,
+    return Boolean(
+      geometryFit &&
+      Array.isArray(
+        (geometryFit as unknown as Record<string, unknown>).regions,
+      ),
+    );
   });
-
-  return profile;
 }
 
 // ============================================================
-// CORREÇÃO OTIMIZADA DA FOLGA
+// DEFORMAÇÃO DA ROUPA
 // ============================================================
 
 /**
- * Corrige a folga radial entre a roupa e a superfície
- * real do avatar Tripo.
+ * Aplica o deformador existente do CAIMENT.
  *
- * Otimizações:
+ * Importante:
+ * applyGarmentDeformation já incorpora a escala uniforme
+ * e a translação na geometria retornada.
  *
- * 1. Os meshes do avatar são coletados uma única vez.
- * 2. A superfície é convertida em um perfil radial
- *    (altura x ângulo) uma única vez, sem raycast.
- * 3. O perfil fica em cache enquanto o avatar não mudar.
- * 4. Cada vértice da roupa apenas consulta o perfil.
- * 5. Cada geometria da roupa é atualizada somente
- *    quando algum vértice realmente é deslocado.
- *
- * A folga continua sendo multiplicada pela escala uniforme.
- *
- * A altura dos vértices é preservada.
+ * Portanto, depois da deformação, o grupo não recebe
+ * novamente a escala ou a translação do resolver.
  */
-function applyAvatarSurfaceClearance(
+function deformClothingForAvatar(
   clothing: Group,
-  avatarFitData: AvatarFitData,
-  requestedClearance: number,
+  fit: GarmentFitDefinition,
+  landmarks: Partial<BodyLandmarks>,
   uniformScale: number,
-): SurfaceClearanceResult {
-  const startedAt = performance.now();
+): boolean {
+  const targets = getDeformationTargets(clothing);
 
-  const result: SurfaceClearanceResult = {
-    requested: requestedClearance,
-    scaled: 0,
-    adjustedVertices: 0,
-    testedVertices: 0,
-    intersectedRays: 0,
-    cacheHits: 0,
-    cacheMisses: 0,
-    applied: false,
-    durationMs: 0,
-  };
-
-  if (
-    !Number.isFinite(requestedClearance) ||
-    requestedClearance <= 0 ||
-    !Number.isFinite(uniformScale) ||
-    uniformScale <= 0
-  ) {
-    result.durationMs =
-      performance.now() - startedAt;
-
-    return result;
-  }
-
-  const clearance =
-    requestedClearance * uniformScale;
-
-  result.scaled = clearance;
-
-  if (
-    !Number.isFinite(clearance) ||
-    clearance <= 0
-  ) {
-    result.durationMs =
-      performance.now() - startedAt;
-
-    return result;
-  }
-
-  const avatar = avatarFitData.surface;
-
-  if (!avatar) {
+  if (targets.length === 0) {
     console.warn(
-      'Superfície do avatar indisponível para correção da folga.',
+      'Não foi encontrada uma geometria compatível com a deformação. Será utilizado o posicionamento por âncoras.',
     );
 
-    result.durationMs =
-      performance.now() - startedAt;
-
-    return result;
+    return false;
   }
 
-  avatar.updateMatrixWorld(true);
-  clothing.updateMatrixWorld(true);
+  const deformationFit = {
+    ...fit,
 
-  const center = avatarFitData.center;
-  const box = avatarFitData.box;
+    // A folga permanece nos metadados originais.
+    // Não deve deslocar os vértices durante esta operação.
+    clearance: 0,
+  } as GarmentFitDefinition;
 
-  const corners = [
-    new Vector3(box.min.x, box.min.y, box.min.z),
-    new Vector3(box.min.x, box.min.y, box.max.z),
-    new Vector3(box.min.x, box.max.y, box.min.z),
-    new Vector3(box.min.x, box.max.y, box.max.z),
-    new Vector3(box.max.x, box.min.y, box.min.z),
-    new Vector3(box.max.x, box.min.y, box.max.z),
-    new Vector3(box.max.x, box.max.y, box.min.z),
-    new Vector3(box.max.x, box.max.y, box.max.z),
-  ];
+  let successfulMeshes = 0;
 
-  let maximumRadius = 0;
+  for (const mesh of targets) {
+    const sourceGeometry = mesh.geometry;
 
-  for (const corner of corners) {
-    const dx = corner.x - center.x;
-    const dz = corner.z - center.z;
-
-    maximumRadius = Math.max(
-      maximumRadius,
-      Math.hypot(dx, dz),
-    );
-  }
-
-  if (
-    !Number.isFinite(maximumRadius) ||
-    maximumRadius <= 0
-  ) {
-    console.warn(
-      'Não foi possível calcular o raio horizontal do avatar.',
-    );
-
-    result.durationMs =
-      performance.now() - startedAt;
-
-    return result;
-  }
-
-  // ----------------------------------------------------------
-  // 1. COLETAR OS MESHES DO AVATAR UMA ÚNICA VEZ
-  // ----------------------------------------------------------
-
-  const avatarMeshes =
-    collectAvatarSurfaceMeshes(avatar);
-
-  if (avatarMeshes.length === 0) {
-    console.warn(
-      'Nenhum mesh visível foi encontrado na superfície do avatar.',
-    );
-
-    result.durationMs =
-      performance.now() - startedAt;
-
-    return result;
-  }
-
-  // ----------------------------------------------------------
-  // 2. PERFIL RADIAL DA SUPERFÍCIE (CALCULADO UMA ÚNICA VEZ)
-  // ----------------------------------------------------------
-
-  /**
-   * Em vez de lançar um raio por combinação de direção e altura
-   * (centenas de milhares de raios contra a malha inteira do
-   * avatar, o que congelava a página), percorremos os triângulos
-   * do avatar uma única vez e guardamos, para cada par
-   * (altura, ângulo), a MAIOR distância radial da superfície.
-   *
-   * Um raio horizontal lançado de fora para o centro sempre
-   * atinge primeiro o ponto mais distante do centro naquela
-   * direção e altura, portanto o resultado é equivalente.
-   */
-  const angleStep =
-    (Math.PI * 2) / CLEARANCE_ANGLE_DIVISIONS;
-
-  const surfaceProfile = getAvatarSurfaceProfile(
-    avatar,
-    avatarMeshes,
-    center,
-    box,
-    angleStep,
-  );
-
-  if (!surfaceProfile) {
-    console.warn(
-      'Não foi possível montar o perfil de superfície do avatar.',
-    );
-
-    result.durationMs =
-      performance.now() - startedAt;
-
-    return result;
-  }
-
-  result.intersectedRays = surfaceProfile.filledBins;
-  result.cacheMisses = surfaceProfile.filledBins;
-
-  const getSurfaceDistance = (
-    angleIndex: number,
-    heightIndex: number,
-  ): number | null => {
-    result.cacheHits++;
-
-    const row =
-      heightIndex - surfaceProfile.minHeightIndex;
-
-    const readBin = (
-      targetRow: number,
-      targetAngle: number,
-    ): number => {
-      if (
-        targetRow < 0 ||
-        targetRow >= surfaceProfile.heightLevels
-      ) {
-        return -1;
-      }
-
-      const wrappedAngle =
-        (targetAngle + CLEARANCE_ANGLE_DIVISIONS) %
-        CLEARANCE_ANGLE_DIVISIONS;
-
-      return surfaceProfile.data[
-        targetRow * CLEARANCE_ANGLE_DIVISIONS +
-          wrappedAngle
-      ] ?? -1;
-    };
-
-    let distance = readBin(row, angleIndex);
-
-    // Faixa sem amostra: usa a maior distância das vizinhas.
-    if (distance < 0) {
-      for (let dRow = -1; dRow <= 1; dRow++) {
-        for (let dAngle = -1; dAngle <= 1; dAngle++) {
-          distance = Math.max(
-            distance,
-            readBin(
-              row + dRow,
-              angleIndex + dAngle,
-            ),
-          );
-        }
-      }
-    }
-
-    return distance < 0 ? null : distance;
-  };
-
-  // ----------------------------------------------------------
-  // 4. PROCESSAR A ROUPA
-  // ----------------------------------------------------------
-
-  const clothingMeshes: Mesh[] = [];
-
-  clothing.traverse((child) => {
-    const mesh = child as Mesh;
-
-    if (
-      mesh.isMesh &&
-      mesh.geometry &&
-      mesh.visible
-    ) {
-      clothingMeshes.push(mesh);
-    }
-  });
-
-  // Vetores reutilizáveis para converter coordenadas
-  // locais e mundiais durante o processamento da roupa.
-  const localVertex = new Vector3();
-  const worldVertex = new Vector3();
-
-  for (const mesh of clothingMeshes) {
-    const geometry = mesh.geometry;
-
-    const positionAttribute =
-      geometry.getAttribute('position');
-
-    if (!positionAttribute) {
-      continue;
-    }
-
-    let meshAdjustedVertices = 0;
-
-    for (
-      let index = 0;
-      index < positionAttribute.count;
-      index++
-    ) {
-      result.testedVertices++;
-
-      // ------------------------------------------------------
-      // 4.1. POSIÇÃO MUNDIAL DO VÉRTICE
-      // ------------------------------------------------------
-
-      localVertex.set(
-        positionAttribute.getX(index),
-        positionAttribute.getY(index),
-        positionAttribute.getZ(index),
-      );
-
-      worldVertex.copy(localVertex);
-
-      mesh.localToWorld(worldVertex);
-
-      // ------------------------------------------------------
-      // 4.2. DIREÇÃO RADIAL HORIZONTAL
-      // ------------------------------------------------------
-
-      const dx = worldVertex.x - center.x;
-      const dz = worldVertex.z - center.z;
-
-      const radialDistance = Math.hypot(dx, dz);
-
-      if (
-        !Number.isFinite(radialDistance) ||
-        radialDistance < MIN_RADIAL_DISTANCE
-      ) {
-        continue;
-      }
-
-      // ------------------------------------------------------
-      // 4.3. QUANTIZAÇÃO DA DIREÇÃO
-      // ------------------------------------------------------
-
-      let angle = Math.atan2(dz, dx);
-
-      if (angle < 0) {
-        angle += Math.PI * 2;
-      }
-
-      const angleIndex =
-        Math.round(angle / angleStep) %
-        CLEARANCE_ANGLE_DIVISIONS;
-
-      // ------------------------------------------------------
-      // 4.4. QUANTIZAÇÃO DA ALTURA
-      // ------------------------------------------------------
-
-      const heightIndex = Math.round(
-        worldVertex.y / CLEARANCE_HEIGHT_STEP,
-      );
-
-      // ------------------------------------------------------
-      // 4.5. CONSULTAR OU CALCULAR A SUPERFÍCIE
-      // ------------------------------------------------------
-
-      const surfaceDistance = getSurfaceDistance(
-        angleIndex,
-        heightIndex,
+    try {
+      const result = applyGarmentDeformation(
+        sourceGeometry,
+        deformationFit,
+        landmarks as BodyLandmarks,
+        {
+          uniformScale,
+          strength: 1,
+        },
       );
 
       if (
-        surfaceDistance === null ||
-        !Number.isFinite(surfaceDistance)
+        !result.geometry ||
+        !result.geometry.attributes.position
       ) {
-        continue;
+        throw new Error(
+          'O deformador não retornou uma geometria válida.',
+        );
       }
 
-      // ------------------------------------------------------
-      // 4.6. DISTÂNCIA RADIAL ATUAL DA ROUPA
-      // ------------------------------------------------------
+      // A geometria original já é uma cópia independente
+      // criada por cloneObjectWithResources.
+      mesh.geometry = result.geometry;
 
-      const currentDistance =
-        dx * (dx / radialDistance) +
-        dz * (dz / radialDistance);
+      // Mantém os metadados originais do encaixe.
+      mesh.geometry.userData.garmentFit = fit;
+      mesh.geometry.userData.garmentType =
+        mesh.geometry.userData.garmentType ??
+        clothing.userData.garmentType;
 
-      const targetDistance =
-        surfaceDistance + clearance;
+      // Libera a geometria substituída.
+      sourceGeometry.dispose();
 
-      if (
-        currentDistance >= targetDistance
-      ) {
-        continue;
-      }
+      mesh.userData.garmentDeformationApplied = true;
 
-      // ------------------------------------------------------
-      // 4.7. CORRIGIR SOMENTE A POSIÇÃO HORIZONTAL
-      // ------------------------------------------------------
+      mesh.userData.garmentDeformation = {
+        deformedVertexCount: result.deformedVertexCount,
+        maximumDisplacement: result.maximumDisplacement,
+        averageDisplacement: result.averageDisplacement,
+        scale: result.scale,
+        translation: result.translation.toArray(),
+        clearanceApplied: false,
+      };
 
-      const radialScale =
-        targetDistance / radialDistance;
+      successfulMeshes++;
 
-      worldVertex.x =
-        center.x + dx * radialScale;
-
-      worldVertex.z =
-        center.z + dz * radialScale;
-
-      // ------------------------------------------------------
-      // 4.8. RETORNAR AO ESPAÇO LOCAL DA ROUPA
-      // ------------------------------------------------------
-
-      mesh.worldToLocal(worldVertex);
-
-      positionAttribute.setXYZ(
-        index,
-        worldVertex.x,
-        worldVertex.y,
-        worldVertex.z,
+      console.log(
+        'DEFORMAÇÃO DA ROUPA CONCLUÍDA',
+        {
+          mesh: mesh.name,
+          deformedVertexCount: result.deformedVertexCount,
+          maximumDisplacement: result.maximumDisplacement,
+          averageDisplacement: result.averageDisplacement,
+          scale: result.scale,
+          translation: result.translation.toArray(),
+        },
       );
-
-      result.adjustedVertices++;
-      meshAdjustedVertices++;
-    }
-
-    // --------------------------------------------------------
-    // 4.9. ATUALIZAR A GEOMETRIA SOMENTE SE NECESSÁRIO
-    // --------------------------------------------------------
-
-    if (meshAdjustedVertices > 0) {
-      positionAttribute.needsUpdate = true;
-
-      geometry.computeVertexNormals();
-      geometry.computeBoundingBox();
-      geometry.computeBoundingSphere();
-
-      result.applied = true;
+    } catch (error) {
+      console.error(
+        `Não foi possível deformar a malha "${mesh.name}":`,
+        error,
+      );
     }
   }
 
-  clothing.updateMatrixWorld(true);
-
-  result.durationMs =
-    performance.now() - startedAt;
-
-  console.log(
-    'CORREÇÃO DA FOLGA ENTRE ROUPA E AVATAR',
-    {
-      requested: result.requested,
-      scaled: result.scaled,
-      adjustedVertices: result.adjustedVertices,
-      testedVertices: result.testedVertices,
-      intersectedRays: result.intersectedRays,
-      cacheHits: result.cacheHits,
-      cacheMisses: result.cacheMisses,
-      cacheEntries: surfaceProfile.filledBins,
-      avatarMeshes: avatarMeshes.length,
-      clothingMeshes: clothingMeshes.length,
-      durationMs: Number(
-        result.durationMs.toFixed(2),
-      ),
-      applied: result.applied,
-    },
-  );
-
-  return result;
+  return successfulMeshes > 0;
 }
 
 // ============================================================
@@ -1521,7 +1029,7 @@ function positionClothingForAvatar(
 
   try {
     // --------------------------------------------------------
-    // 1. CALCULAR A ESCALA ANTES DE RESOLVER O ENCAIXE
+    // 1. ESCALA UNIFORME
     // --------------------------------------------------------
 
     const userHeightMeters =
@@ -1531,7 +1039,7 @@ function positionClothingForAvatar(
       calculateUniformGarmentScale(measurements);
 
     // --------------------------------------------------------
-    // 2. FILTRAR AS ÂNCORAS DISPONÍVEIS
+    // 2. FILTRAR ÂNCORAS DISPONÍVEIS
     // --------------------------------------------------------
 
     const partialFit = createPartialGarmentFit(
@@ -1555,7 +1063,7 @@ function positionClothingForAvatar(
     }
 
     // --------------------------------------------------------
-    // 3. MAPEAR AS ÂNCORAS PARA O AVATAR
+    // 3. MAPEAR ÂNCORAS PARA O AVATAR
     // --------------------------------------------------------
 
     const mapping = mapGarmentAnchorsToAvatar(
@@ -1583,7 +1091,7 @@ function positionClothingForAvatar(
     }
 
     // --------------------------------------------------------
-    // 4. RESOLVER O ENCAIXE CONSIDERANDO A ESCALA
+    // 4. RESOLVER ENCAIXE
     // --------------------------------------------------------
 
     const resolution = resolveGarmentFit(
@@ -1605,56 +1113,78 @@ function positionClothingForAvatar(
     }
 
     // --------------------------------------------------------
-    // 5. POSICIONAR A ROUPA
+    // 5. APLICAR DEFORMAÇÃO LOCAL
     // --------------------------------------------------------
 
-    positionGarmentGroupOnAvatar(
-      clothing,
-      partialFit,
-      landmarks as BodyLandmarks,
-      {
-        uniformScale,
-        translation: resolution.translation.clone(),
-        calculateScale: true,
-        calculateTranslation: true,
-        applyLocalDeformation: false,
-      },
-    );
-
-    clothing.updateMatrixWorld(true);
-
-    // --------------------------------------------------------
-    // 6. CORRIGIR A FOLGA
-    // --------------------------------------------------------
-
-    const clearanceResult =
-      applyAvatarSurfaceClearance(
+    const deformationApplied =
+      deformClothingForAvatar(
         clothing,
-        avatarFitData,
-        fit.clearance,
+        partialFit,
+        landmarks,
         uniformScale,
       );
 
-    clothing.updateMatrixWorld(true);
+    if (deformationApplied) {
+      /**
+       * O deformador já aplicou escala e translação
+       * diretamente na geometria.
+       *
+       * Não aplicamos novamente a transformação ao grupo.
+       */
+      clothing.scale.set(1, 1, 1);
+      clothing.position.set(0, 0, 0);
+
+      clothing.updateMatrix();
+      clothing.updateMatrixWorld(true);
+    } else {
+      /**
+       * Alternativa para geometrias sem regiões compatíveis:
+       * posicionamento convencional por escala uniforme
+       * e translação.
+       */
+      positionGarmentGroupOnAvatar(
+        clothing,
+        partialFit,
+        landmarks as BodyLandmarks,
+        {
+          uniformScale,
+          translation: resolution.translation.clone(),
+          calculateScale: true,
+          calculateTranslation: true,
+          applyLocalDeformation: false,
+        },
+      );
+
+      clothing.updateMatrixWorld(true);
+    }
 
     // --------------------------------------------------------
-    // 7. REGISTRAR O RESULTADO
+    // 6. REGISTRAR RESULTADO
     // --------------------------------------------------------
 
-    clothing.userData.garmentDeformationApplied = false;
+    const requestedClearance = fit.clearance;
+
+    const scaledClearance =
+      requestedClearance * uniformScale;
+
+    clothing.userData.garmentDeformationApplied =
+      deformationApplied;
+
     clothing.userData.garmentPositioningApplied = true;
     clothing.userData.avatarFitApplied = true;
     clothing.userData.bodyLandmarksSource = 'avatar_tripo';
 
-    clothing.userData.surfaceClearanceApplied =
-      clearanceResult.applied;
+    clothing.userData.surfaceClearanceApplied = false;
 
     clothing.userData.garmentPositioning = {
       garmentType,
+
       anchorCount: mapping.mappedCount,
       completeMapping: resolution.completeMapping,
+
       uniformScale,
       userHeightMeters,
+
       scale: clothing.scale.toArray(),
       translation: clothing.position.toArray(),
 
@@ -1666,24 +1196,14 @@ function positionClothingForAvatar(
 
       weightedResidual: resolution.weightedResidual,
       maximumResidual: resolution.maximumResidual,
-      localDeformationApplied: false,
 
-      surfaceClearance: {
-        requested: clearanceResult.requested,
-        scaled: clearanceResult.scaled,
-        adjustedVertices:
-          clearanceResult.adjustedVertices,
-        testedVertices:
-          clearanceResult.testedVertices,
-        intersectedRays:
-          clearanceResult.intersectedRays,
-        cacheHits:
-          clearanceResult.cacheHits,
-        cacheMisses:
-          clearanceResult.cacheMisses,
-        durationMs:
-          clearanceResult.durationMs,
-        applied: clearanceResult.applied,
+      localDeformationApplied: deformationApplied,
+
+      clearance: {
+        requested: requestedClearance,
+        scaled: scaledClearance,
+        applied: false,
+        strategy: 'metadata_only',
       },
     };
 
@@ -1691,21 +1211,26 @@ function positionClothingForAvatar(
       'POSICIONAMENTO DA ROUPA CONCLUÍDO',
       {
         garmentType,
+
         anchorCount: mapping.mappedCount,
         completeMapping: resolution.completeMapping,
+
         uniformScale,
         userHeightMeters,
+
         scale: clothing.scale.toArray(),
         translation: clothing.position.toArray(),
+
         weightedResidual: resolution.weightedResidual,
         maximumResidual: resolution.maximumResidual,
-        localDeformationApplied: false,
-        surfaceClearanceApplied:
-          clearanceResult.applied,
-        adjustedVertices:
-          clearanceResult.adjustedVertices,
-        clearanceDurationMs:
-          clearanceResult.durationMs,
+
+        localDeformationApplied: deformationApplied,
+
+        clearance: {
+          requested: requestedClearance,
+          scaled: scaledClearance,
+          applied: false,
+        },
       },
     );
 
@@ -1782,9 +1307,7 @@ function RealModel({
         let meshCount = 0;
 
         avatar.traverse((child) => {
-          const mesh = child as Mesh;
-
-          if (mesh.isMesh) {
+          if (child instanceof Mesh) {
             meshCount++;
           }
         });
@@ -1804,7 +1327,6 @@ function RealModel({
         prepareObjectForRendering(avatar);
 
         loadedModel = avatar;
-
         setModel(avatar);
       },
 
@@ -1914,7 +1436,6 @@ function AvatarModelObject({
 
       if (cached?.model === model) {
         setNormalizedAvatar(cached.group);
-
         publishFitData(cached.fitData);
 
         return () => {
@@ -1923,7 +1444,7 @@ function AvatarModelObject({
       }
 
       // ------------------------------------------------------
-      // 2. NORMALIZAR O MODELO
+      // 2. NORMALIZAR MODELO
       // ------------------------------------------------------
 
       model.rotation.set(
@@ -1972,6 +1493,7 @@ function AvatarModelObject({
         {
           originalRotationY: AVATAR_ROTATION_Y,
           targetHeight: AVATAR_TARGET_HEIGHT,
+
           unitScale: normalized.unitScale,
           modelScale: normalized.modelScale,
 
@@ -2000,7 +1522,6 @@ function AvatarModelObject({
       // ------------------------------------------------------
 
       setNormalizedAvatar(normalized.group);
-
       publishFitData(fitData);
     } catch (error) {
       if (cancelled) {
@@ -2049,6 +1570,7 @@ function ClothingModel({
 
   useEffect(() => {
     let cancelled = false;
+
     let ownedModel: Object3D | null = null;
     let ownsTextures = false;
 
@@ -2111,7 +1633,6 @@ function ClothingModel({
         }
 
         ownedModel = clothingGroup;
-
         setModel(clothingGroup);
       } catch (error) {
         console.error(

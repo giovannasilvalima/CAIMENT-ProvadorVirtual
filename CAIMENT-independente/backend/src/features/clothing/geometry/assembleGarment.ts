@@ -57,7 +57,6 @@ interface BoundaryEdge {
   panelName: string;
   vertexIndices: [number, number];
   globalVertexIndices: [number, number];
-
   boundaryId?: string;
   boundaryName?: string;
   role?: GarmentBoundaryDefinition['role'];
@@ -77,22 +76,54 @@ interface SeamVisualReference {
   edgeA: number[];
 }
 
-const EPSILON = 1e-7;
-
-/**
- * CHAVE DE ARESTA
- */
-
-function createEdgeKey(a: number, b: number): string {
-  const minimum = Math.min(a, b);
-  const maximum = Math.max(a, b);
-
-  return `${minimum}:${maximum}`;
+interface WeldConstraintData {
+  particleA: number;
+  particleB: number;
+  restLength: number;
+  stiffness: number;
+  type: 'seam';
 }
 
-/**
- * VALIDAÇÃO DOS PAINÉIS
- */
+const EPSILON = 1e-7;
+
+/* -------------------------------------------------------------------------- */
+/*                                  UTILITÁRIOS                               */
+/* -------------------------------------------------------------------------- */
+
+function createEdgeKey(a: number, b: number): string {
+  return `${Math.min(a, b)}:${Math.max(a, b)}`;
+}
+
+function createPanelEdgeOccurrences(
+  panel: GarmentPanel,
+): Map<string, PanelEdgeOccurrence> {
+  const occurrences = new Map<string, PanelEdgeOccurrence>();
+
+  for (const triangle of panel.triangles) {
+    const edges: Array<[number, number]> = [
+      [triangle.a, triangle.b],
+      [triangle.b, triangle.c],
+      [triangle.c, triangle.a],
+    ];
+
+    for (const [a, b] of edges) {
+      const key = createEdgeKey(a, b);
+      const existing = occurrences.get(key);
+
+      if (existing) {
+        existing.count++;
+      } else {
+        occurrences.set(key, { a, b, count: 1 });
+      }
+    }
+  }
+
+  return occurrences;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  VALIDAÇÃO                                 */
+/* -------------------------------------------------------------------------- */
 
 function validatePanel(panel: GarmentPanel): void {
   if (!panel || !panel.id?.trim()) {
@@ -103,7 +134,7 @@ function validatePanel(panel: GarmentPanel): void {
     !panel.name?.trim() ||
     !Array.isArray(panel.vertices) ||
     !Array.isArray(panel.triangles) ||
-    panel.vertices.length === 0 ||
+    panel.vertices.length < 3 ||
     panel.triangles.length === 0
   ) {
     throw new Error(
@@ -128,10 +159,7 @@ function validatePanel(panel: GarmentPanel): void {
 
     if (
       vertex.mass !== undefined &&
-      (
-        !Number.isFinite(vertex.mass) ||
-        vertex.mass <= 0
-      )
+      (!Number.isFinite(vertex.mass) || vertex.mass <= 0)
     ) {
       throw new Error(
         `CAIMENT: massa inválida no vértice ${i} do painel "${panel.name}".`,
@@ -161,10 +189,6 @@ function validatePanel(panel: GarmentPanel): void {
     }
   }
 }
-
-/**
- * VALIDAÇÃO DAS COSTURAS
- */
 
 function validateSeam(
   seam: GarmentSeam,
@@ -227,9 +251,34 @@ function validateSeam(
   }
 }
 
-/**
- * CORRESPONDÊNCIA GEOMÉTRICA DAS COSTURAS
- */
+function validateSeamBoundary(
+  seam: GarmentSeam,
+  panel: GarmentPanel,
+  edge: number[],
+  occurrences: Map<string, PanelEdgeOccurrence>,
+): void {
+  for (let i = 0; i < edge.length - 1; i++) {
+    const a = edge[i];
+    const b = edge[i + 1];
+    const occurrence = occurrences.get(createEdgeKey(a, b));
+
+    if (!occurrence) {
+      throw new Error(
+        `CAIMENT: o segmento ${a}-${b} da costura "${seam.name}" não existe na triangulação do painel "${panel.name}".`,
+      );
+    }
+
+    if (occurrence.count !== 1) {
+      throw new Error(
+        `CAIMENT: o segmento ${a}-${b} da costura "${seam.name}" não pertence a uma borda aberta do painel "${panel.name}".`,
+      );
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                         CORRESPONDÊNCIA DAS COSTURAS                       */
+/* -------------------------------------------------------------------------- */
 
 function calculateEdgeDistance(
   edgeA: number[],
@@ -247,7 +296,6 @@ function calculateEdgeDistance(
   for (let i = 0; i < edgeA.length; i++) {
     const positionA = panelA.vertices[edgeA[i]].position;
     const positionB = panelB.vertices[edgeB[i]].position;
-
     const distance = positionA.distanceTo(positionB);
 
     total += distance;
@@ -285,14 +333,8 @@ function resolveSeamCorrespondence(
   );
 
   const useReversed = reversed.total < direct.total;
-
-  const edgeB = useReversed
-    ? reversedEdgeB
-    : directEdgeB;
-
-  const correspondence = useReversed
-    ? reversed
-    : direct;
+  const edgeB = useReversed ? reversedEdgeB : directEdgeB;
+  const correspondence = useReversed ? reversed : direct;
 
   return {
     seam,
@@ -305,9 +347,9 @@ function resolveSeamCorrespondence(
   };
 }
 
-/**
- * REGIÕES SEMÂNTICAS
- */
+/* -------------------------------------------------------------------------- */
+/*                              REGIÕES SEMÂNTICAS                            */
+/* -------------------------------------------------------------------------- */
 
 function assembleSemanticRegions(
   fit: GarmentFitDefinition | undefined,
@@ -363,9 +405,9 @@ function assembleSemanticRegions(
   });
 }
 
-/**
- * DETECÇÃO DE TRIÂNGULOS DEGENERADOS
- */
+/* -------------------------------------------------------------------------- */
+/*                           INTEGRIDADE DOS TRIÂNGULOS                       */
+/* -------------------------------------------------------------------------- */
 
 function isDegenerateTriangle(
   positions: number[],
@@ -402,12 +444,15 @@ function isDegenerateTriangle(
     crossY * crossY +
     crossZ * crossZ;
 
-  return areaSquared <= EPSILON * EPSILON;
+  return (
+    !Number.isFinite(areaSquared) ||
+    areaSquared <= EPSILON * EPSILON
+  );
 }
 
-/**
- * UNIÃO DOS VÉRTICES COSTURADOS
- */
+/* -------------------------------------------------------------------------- */
+/*                             GRUPOS DE COSTURA                              */
+/* -------------------------------------------------------------------------- */
 
 function createDisjointSet() {
   const parents = new Map<string, string>();
@@ -439,16 +484,8 @@ function createDisjointSet() {
     }
   }
 
-  return {
-    parents,
-    find,
-    connect,
-  };
+  return { parents, find, connect };
 }
-
-/**
- * GRUPOS DE VÉRTICES COSTURADOS
- */
 
 function createWeldGroups(
   panels: GarmentPanel[],
@@ -461,24 +498,15 @@ function createWeldGroups(
   for (const panel of panels) {
     const offset = panelOffsets.get(panel.id);
 
-    if (offset === undefined) {
-      continue;
-    }
+    if (offset === undefined) continue;
 
-    for (
-      let vertexIndex = 0;
-      vertexIndex < panel.vertices.length;
-      vertexIndex++
-    ) {
+    for (let vertexIndex = 0; vertexIndex < panel.vertices.length; vertexIndex++) {
       const key = `${panel.id}:${vertexIndex}`;
 
-      if (!parents.has(key)) {
-        continue;
-      }
+      if (!parents.has(key)) continue;
 
       const root = find(key);
       const globalIndex = offset + vertexIndex;
-
       const group = groups.get(root) ?? [];
 
       group.push(globalIndex);
@@ -488,42 +516,57 @@ function createWeldGroups(
 
   return [...groups.entries()]
     .filter(([, indices]) => indices.length > 1)
-    .map(([root, globalIndices]) => ({
-      root,
-      globalIndices,
-    }));
+    .map(([root, globalIndices]) => ({ root, globalIndices }));
 }
 
 /**
- * PRESERVAÇÃO DOS CONTORNOS NOS ENCONTROS
+ * Cria vínculos físicos entre vértices correspondentes.
+ *
+ * Os vértices NÃO são deslocados durante a montagem.
+ * A ClothSimulation aproxima os pares usando restLength = 0.
  */
+function createWeldConstraints(
+  resolvedSeams: ResolvedSeam[],
+  panelOffsets: Map<string, number>,
+): WeldConstraintData[] {
+  const constraints: WeldConstraintData[] = [];
+  const seen = new Set<string>();
 
-function preserveWeldedPositions(
-  positions: number[],
-  groups: WeldGroup[],
-): void {
-  for (const group of groups) {
-    const center = new THREE.Vector3();
+  for (const resolved of resolvedSeams) {
+    const offsetA = panelOffsets.get(resolved.panelA.id);
+    const offsetB = panelOffsets.get(resolved.panelB.id);
 
-    for (const globalIndex of group.globalIndices) {
-      center.x += positions[globalIndex * 3];
-      center.y += positions[globalIndex * 3 + 1];
-      center.z += positions[globalIndex * 3 + 2];
-    }
+    if (offsetA === undefined || offsetB === undefined) continue;
 
-    center.divideScalar(group.globalIndices.length);
+    for (let i = 0; i < resolved.edgeA.length; i++) {
+      const particleA = offsetA + resolved.edgeA[i];
+      const particleB = offsetB + resolved.edgeB[i];
 
-    for (const globalIndex of group.globalIndices) {
-      positions[globalIndex * 3] = center.x;
-      positions[globalIndex * 3 + 1] = center.y;
-      positions[globalIndex * 3 + 2] = center.z;
+      const key = `${Math.min(particleA, particleB)}:${Math.max(
+        particleA,
+        particleB,
+      )}`;
+
+      if (seen.has(key)) continue;
+
+      seen.add(key);
+
+      constraints.push({
+        particleA,
+        particleB,
+        restLength: 0,
+        stiffness: resolved.seam.stiffness,
+        type: 'seam',
+      });
     }
   }
+
+  return constraints;
 }
 
-/**
- * NORMAIS NAS COSTURAS
- */
+/* -------------------------------------------------------------------------- */
+/*                              NORMAIS DAS COSTURAS                          */
+/* -------------------------------------------------------------------------- */
 
 function smoothWeldedNormals(
   geometry: THREE.BufferGeometry,
@@ -533,14 +576,10 @@ function smoothWeldedNormals(
     'normal',
   ) as THREE.BufferAttribute | undefined;
 
-  if (!normalAttribute) {
-    return;
-  }
+  if (!normalAttribute) return;
 
   for (const group of groups) {
-    if (group.globalIndices.length < 2) {
-      continue;
-    }
+    if (group.globalIndices.length < 2) continue;
 
     const average = new THREE.Vector3();
 
@@ -550,9 +589,7 @@ function smoothWeldedNormals(
       average.z += normalAttribute.getZ(globalIndex);
     }
 
-    if (average.lengthSq() <= EPSILON * EPSILON) {
-      continue;
-    }
+    if (average.lengthSq() <= EPSILON * EPSILON) continue;
 
     average.normalize();
 
@@ -569,9 +606,9 @@ function smoothWeldedNormals(
   normalAttribute.needsUpdate = true;
 }
 
-/**
- * DETECÇÃO DE BORDAS ABERTAS
- */
+/* -------------------------------------------------------------------------- */
+/*                            BORDAS ABERTAS                                  */
+/* -------------------------------------------------------------------------- */
 
 function detectOpenBoundaryEdges(
   panels: GarmentPanel[],
@@ -582,26 +619,18 @@ function detectOpenBoundaryEdges(
 
   for (const resolved of resolvedSeams) {
     const panelAEdges =
-      sewnEdgesByPanel.get(resolved.panelA.id) ??
-      new Set<string>();
+      sewnEdgesByPanel.get(resolved.panelA.id) ?? new Set<string>();
 
     const panelBEdges =
-      sewnEdgesByPanel.get(resolved.panelB.id) ??
-      new Set<string>();
+      sewnEdgesByPanel.get(resolved.panelB.id) ?? new Set<string>();
 
     for (let i = 0; i < resolved.edgeA.length - 1; i++) {
       panelAEdges.add(
-        createEdgeKey(
-          resolved.edgeA[i],
-          resolved.edgeA[i + 1],
-        ),
+        createEdgeKey(resolved.edgeA[i], resolved.edgeA[i + 1]),
       );
 
       panelBEdges.add(
-        createEdgeKey(
-          resolved.edgeB[i],
-          resolved.edgeB[i + 1],
-        ),
+        createEdgeKey(resolved.edgeB[i], resolved.edgeB[i + 1]),
       );
     }
 
@@ -609,90 +638,45 @@ function detectOpenBoundaryEdges(
     sewnEdgesByPanel.set(resolved.panelB.id, panelBEdges);
   }
 
-  const openBoundaryEdges: BoundaryEdge[] = [];
+  const result: BoundaryEdge[] = [];
 
   for (const panel of panels) {
-    const edgeOccurrences =
-      new Map<string, PanelEdgeOccurrence>();
-
+    const occurrences = createPanelEdgeOccurrences(panel);
     const sewnEdges =
       sewnEdgesByPanel.get(panel.id) ?? new Set<string>();
 
-    const panelOffset = panelOffsets.get(panel.id);
+    const offset = panelOffsets.get(panel.id);
 
-    if (panelOffset === undefined) {
-      continue;
-    }
+    if (offset === undefined) continue;
 
-    for (const triangle of panel.triangles) {
-      const triangleEdges: Array<[number, number]> = [
-        [triangle.a, triangle.b],
-        [triangle.b, triangle.c],
-        [triangle.c, triangle.a],
-      ];
+    for (const [key, occurrence] of occurrences) {
+      if (occurrence.count !== 1 || sewnEdges.has(key)) continue;
 
-      for (const [a, b] of triangleEdges) {
-        const key = createEdgeKey(a, b);
-        const existing = edgeOccurrences.get(key);
-
-        if (existing) {
-          existing.count++;
-        } else {
-          edgeOccurrences.set(key, {
-            a,
-            b,
-            count: 1,
-          });
-        }
-      }
-    }
-
-    for (const [key, occurrence] of edgeOccurrences) {
-      if (
-        occurrence.count !== 1 ||
-        sewnEdges.has(key)
-      ) {
-        continue;
-      }
-
-      openBoundaryEdges.push({
+      result.push({
         panelId: panel.id,
         panelName: panel.name,
-        vertexIndices: [
-          occurrence.a,
-          occurrence.b,
-        ],
+        vertexIndices: [occurrence.a, occurrence.b],
         globalVertexIndices: [
-          panelOffset + occurrence.a,
-          panelOffset + occurrence.b,
+          offset + occurrence.a,
+          offset + occurrence.b,
         ],
       });
     }
   }
 
-  return openBoundaryEdges;
+  return result;
 }
-
-/**
- * CLASSIFICAÇÃO SEMÂNTICA DAS BORDAS
- */
 
 function classifyOpenBoundaryEdges(
   openBoundaryEdges: BoundaryEdge[],
   boundaries: GarmentBoundaryDefinition[] | undefined,
   panels: GarmentPanel[],
 ): BoundaryEdge[] {
-  if (!boundaries?.length) {
-    return openBoundaryEdges;
-  }
+  if (!boundaries?.length) return openBoundaryEdges;
 
-  const panelMap = new Map(
-    panels.map((panel) => [panel.id, panel]),
-  );
-
+  const panelMap = new Map(panels.map((panel) => [panel.id, panel]));
   const boundaryIds = new Set<string>();
   const classifiedSegments = new Set<string>();
-
   const edgeMap = new Map<string, BoundaryEdge>();
 
   for (const edge of openBoundaryEdges) {
@@ -746,11 +730,7 @@ function classifyOpenBoundaryEdges(
       }
     }
 
-    for (
-      let i = 0;
-      i < boundary.vertexIndices.length - 1;
-      i++
-    ) {
+    for (let i = 0; i < boundary.vertexIndices.length - 1; i++) {
       const a = boundary.vertexIndices[i];
       const b = boundary.vertexIndices[i + 1];
 
@@ -789,9 +769,9 @@ function classifyOpenBoundaryEdges(
   return openBoundaryEdges;
 }
 
-/**
- * GEOMETRIA MONTADA
- */
+/* -------------------------------------------------------------------------- */
+/*                            GEOMETRIA MONTADA                               */
+/* -------------------------------------------------------------------------- */
 
 function createAssembledGeometry(
   meshData: GarmentMeshData,
@@ -800,6 +780,7 @@ function createAssembledGeometry(
   const panelOffsets = new Map<string, number>();
 
   const positions: number[] = [];
+  const masses: number[] = [];
   const indices: number[] = [];
 
   for (const panel of meshData.panels) {
@@ -820,7 +801,22 @@ function createAssembledGeometry(
         vertex.position.y,
         vertex.position.z,
       );
+
+      // Massa individual usada pela simulação física.
+      masses.push(vertex.mass ?? 1);
     }
+  }
+
+  const panelEdgeOccurrences = new Map<
+    string,
+    Map<string, PanelEdgeOccurrence>
+  >();
+
+  for (const panel of meshData.panels) {
+    panelEdgeOccurrences.set(
+      panel.id,
+      createPanelEdgeOccurrences(panel),
+    );
   }
 
   const resolvedSeams: ResolvedSeam[] = [];
@@ -846,29 +842,36 @@ function createAssembledGeometry(
 
     validateSeam(seam, panelA, panelB);
 
-    resolvedSeams.push(
-      resolveSeamCorrespondence(
-        seam,
-        panelA,
-        panelB,
-      ),
+    const resolved = resolveSeamCorrespondence(
+      seam,
+      panelA,
+      panelB,
     );
+
+    validateSeamBoundary(
+      seam,
+      panelA,
+      resolved.edgeA,
+      panelEdgeOccurrences.get(panelA.id)!,
+    );
+
+    validateSeamBoundary(
+      seam,
+      panelB,
+      resolved.edgeB,
+      panelEdgeOccurrences.get(panelB.id)!,
+    );
+
+    resolvedSeams.push(resolved);
   }
 
   const disjointSet = createDisjointSet();
 
   for (const resolved of resolvedSeams) {
-    const {
-      panelA,
-      panelB,
-      edgeA,
-      edgeB,
-    } = resolved;
-
-    for (let i = 0; i < edgeA.length; i++) {
+    for (let i = 0; i < resolved.edgeA.length; i++) {
       disjointSet.connect(
-        `${panelA.id}:${edgeA[i]}`,
-        `${panelB.id}:${edgeB[i]}`,
+        `${resolved.panelA.id}:${resolved.edgeA[i]}`,
+        `${resolved.panelB.id}:${resolved.edgeB[i]}`,
       );
     }
   }
@@ -880,10 +883,12 @@ function createAssembledGeometry(
     disjointSet.parents,
   );
 
-  preserveWeldedPositions(
-    positions,
-    weldGroups,
-  );
+  /*
+   * IMPORTANTE:
+   * Não fazemos média nem deslocamento das posições dos vértices.
+   * Isso preserva a modelagem original de cada painel e evita
+   * triângulos degenerados causados pelo colapso das costuras.
+   */
 
   for (const panel of meshData.panels) {
     const offset = panelOffsets.get(panel.id)!;
@@ -895,16 +900,9 @@ function createAssembledGeometry(
       const b = offset + triangle.b;
       const c = offset + triangle.c;
 
-      if (
-        isDegenerateTriangle(
-          positions,
-          a,
-          b,
-          c,
-        )
-      ) {
+      if (isDegenerateTriangle(positions, a, b, c)) {
         throw new Error(
-          `CAIMENT: triângulo degenerado no painel "${panel.name}", triângulo ${i}. Verifique a geometria e a correspondência das costuras.`,
+          `CAIMENT: triângulo degenerado no painel "${panel.name}", triângulo ${i}. Verifique a geometria original do painel.`,
         );
       }
 
@@ -913,14 +911,14 @@ function createAssembledGeometry(
   }
 
   if (indices.length === 0) {
-    throw new Error(
-      'CAIMENT: montagem sem triângulos.',
-    );
+    throw new Error('CAIMENT: montagem sem triângulos.');
   }
+
+  const totalVertexCount = positions.length / 3;
 
   const assembledRegions = assembleSemanticRegions(
     meshData.fit,
-    positions.length / 3,
+    totalVertexCount,
   );
 
   const detectedBoundaryEdges = detectOpenBoundaryEdges(
@@ -935,139 +933,98 @@ function createAssembledGeometry(
     meshData.panels,
   );
 
+  const weldConstraints = createWeldConstraints(
+    resolvedSeams,
+    panelOffsets,
+  );
+
   const geometry = new THREE.BufferGeometry();
 
   geometry.setAttribute(
     'position',
-    new THREE.Float32BufferAttribute(
-      positions,
-      3,
-    ),
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+
+  // Atributo lido diretamente pela ClothSimulation.
+  geometry.setAttribute(
+    'mass',
+    new THREE.Float32BufferAttribute(masses, 1),
   );
 
   geometry.setIndex(indices);
 
-  geometry.userData.panelOffsets =
-    Object.fromEntries(panelOffsets);
-
+  geometry.userData.vertexMasses = new Float32Array(masses);
+  geometry.userData.panelOffsets = Object.fromEntries(panelOffsets);
   geometry.userData.seams = meshData.seams;
+  geometry.userData.garmentFit = meshData.fit ?? null;
+  geometry.userData.assembledGarmentRegions = assembledRegions;
+  geometry.userData.coordinateSystem = meshData.coordinateSystem ?? null;
 
-  geometry.userData.garmentFit =
-    meshData.fit ?? null;
+  geometry.userData.seamDiagnostics = resolvedSeams.map((resolved) => ({
+    id: resolved.seam.id,
+    name: resolved.seam.name,
+    vertexCount: resolved.edgeA.length,
+    maximumInitialGap: resolved.maximumInitialGap,
+    averageInitialGap: resolved.averageInitialGap,
+    stiffness: resolved.seam.stiffness,
+  }));
 
-  geometry.userData.assembledGarmentRegions =
-    assembledRegions;
+  geometry.userData.resolvedSeamEdges = resolvedSeams.map((resolved) => ({
+    id: resolved.seam.id,
+    name: resolved.seam.name,
+    panelAId: resolved.panelA.id,
+    edgeA: [...resolved.edgeA],
+  }));
 
-  geometry.userData.coordinateSystem =
-    meshData.coordinateSystem ?? null;
+  geometry.userData.weldGroups = weldGroups.map((group) => ({
+    root: group.root,
+    globalIndices: [...group.globalIndices],
+  }));
 
-  geometry.userData.seamDiagnostics =
-    resolvedSeams.map((resolved) => ({
-      id: resolved.seam.id,
-      name: resolved.seam.name,
-      vertexCount: resolved.edgeA.length,
-      maximumInitialGap: resolved.maximumInitialGap,
-      averageInitialGap: resolved.averageInitialGap,
-    }));
-
-  geometry.userData.resolvedSeamEdges =
-    resolvedSeams.map((resolved) => ({
-      id: resolved.seam.id,
-      name: resolved.seam.name,
-      panelAId: resolved.panelA.id,
-      edgeA: [...resolved.edgeA],
-    }));
-
-  /**
-   * Grupos de vértices costurados.
-   *
-   * Cada grupo contém os índices globais dos vértices
-   * que precisam permanecer conectados durante a física.
-   */
-  geometry.userData.weldGroups =
-    weldGroups.map((group) => ({
-      root: group.root,
-      globalIndices: [...group.globalIndices],
-    }));
-
-  geometry.userData.weldConstraints =
-    weldGroups.flatMap((group) => {
-      const first = group.globalIndices[0];
-
-      return group.globalIndices.slice(1).map((index) => ({
-        particleA: first,
-        particleB: index,
-        restLength: 0,
-        stiffness: 1,
-        type: 'seam' as const,
-      }));
-    });
-
-  geometry.userData.openBoundaryEdges =
-    openBoundaryEdges;
-
-  geometry.userData.openBoundaryEdgeCount =
-    openBoundaryEdges.length;
+  geometry.userData.weldConstraints = weldConstraints;
+  geometry.userData.openBoundaryEdges = openBoundaryEdges;
+  geometry.userData.openBoundaryEdgeCount = openBoundaryEdges.length;
 
   geometry.userData.classifiedBoundaryEdgeCount =
-    openBoundaryEdges.filter(
-      (edge) => edge.role !== undefined,
-    ).length;
+    openBoundaryEdges.filter((edge) => edge.role !== undefined).length;
 
   geometry.userData.unclassifiedBoundaryEdgeCount =
-    openBoundaryEdges.filter(
-      (edge) => edge.role === undefined,
-    ).length;
+    openBoundaryEdges.filter((edge) => edge.role === undefined).length;
 
   geometry.userData.openBoundaryEdgesByPanel =
     openBoundaryEdges.reduce(
-      (
-        result: Record<string, BoundaryEdge[]>,
-        edge,
-      ) => {
-        if (!result[edge.panelId]) {
-          result[edge.panelId] = [];
-        }
-
+      (result: Record<string, BoundaryEdge[]>, edge) => {
+        result[edge.panelId] ??= [];
         result[edge.panelId].push(edge);
-
         return result;
       },
       {},
     );
 
-  geometry.userData.boundaryDefinitions =
-    meshData.boundaries ?? [];
+  geometry.userData.boundaryDefinitions = meshData.boundaries ?? [];
 
   geometry.computeVertexNormals();
-
-  smoothWeldedNormals(
-    geometry,
-    weldGroups,
-  );
+  smoothWeldedNormals(geometry, weldGroups);
 
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
 
-  geometry.userData.weldedVertexGroupCount =
-    weldGroups.length;
+  geometry.userData.weldedVertexGroupCount = weldGroups.length;
 
-  geometry.userData.weldedVertexCount =
-    weldGroups.reduce(
-      (total, group) =>
-        total + group.globalIndices.length,
-      0,
-    );
+  geometry.userData.weldedVertexCount = weldGroups.reduce(
+    (total, group) => total + group.globalIndices.length,
+    0,
+  );
+
+  geometry.userData.weldConstraintCount = weldConstraints.length;
+  geometry.userData.vertexMassCount = masses.length;
 
   return geometry;
 }
 
-/**
- * DETALHES VISUAIS DAS COSTURAS
- *
- * As linhas são mantidas como referências aos vértices
- * da malha física e podem acompanhar sua deformação.
- */
+/* -------------------------------------------------------------------------- */
+/*                         DETALHES VISUAIS DAS COSTURAS                      */
+/* -------------------------------------------------------------------------- */
 
 function createSeamVisualDetails(
   geometry: THREE.BufferGeometry,
@@ -1091,32 +1048,24 @@ function createSeamVisualDetails(
       | Record<string, number>
       | undefined;
 
-  if (
-    !resolvedSeams?.length ||
-    !positionAttribute ||
-    !panelOffsets
-  ) {
+  if (!resolvedSeams?.length || !positionAttribute || !panelOffsets) {
     return null;
   }
 
   const detailsGroup = new THREE.Group();
 
   detailsGroup.name = 'GarmentVisualDetails';
-
   detailsGroup.userData.isVisualOnly = true;
-
   detailsGroup.userData.excludeFromClothSimulation = true;
 
-  const boundingRadius =
-    geometry.boundingSphere?.radius ?? 0;
+  const boundingRadius = geometry.boundingSphere?.radius ?? 0;
 
   const surfaceOffset = Math.max(
     boundingRadius * 0.00035,
     EPSILON * 10,
   );
 
-  const seamColor = new THREE.Color(fabricColor)
-    .multiplyScalar(0.62);
+  const seamColor = new THREE.Color(fabricColor).multiplyScalar(0.62);
 
   const seamMaterial = new THREE.LineBasicMaterial({
     color: seamColor,
@@ -1130,8 +1079,7 @@ function createSeamVisualDetails(
   let createdLineCount = 0;
 
   for (const seam of resolvedSeams) {
-    const panelOffset =
-      panelOffsets[seam.panelAId];
+    const panelOffset = panelOffsets[seam.panelAId];
 
     if (
       !Number.isInteger(panelOffset) ||
@@ -1144,8 +1092,7 @@ function createSeamVisualDetails(
     const points: THREE.Vector3[] = [];
 
     for (const localIndex of seam.edgeA) {
-      const globalIndex =
-        panelOffset + localIndex;
+      const globalIndex = panelOffset + localIndex;
 
       if (
         !Number.isInteger(globalIndex) ||
@@ -1169,49 +1116,31 @@ function createSeamVisualDetails(
         );
 
         if (normal.lengthSq() > EPSILON * EPSILON) {
-          point.addScaledVector(
-            normal.normalize(),
-            surfaceOffset,
-          );
+          point.addScaledVector(normal.normalize(), surfaceOffset);
         }
       }
 
       points.push(point);
     }
 
-    if (points.length < 2) {
-      continue;
-    }
+    if (points.length < 2) continue;
 
     const lineGeometry = new THREE.BufferGeometry();
-
     lineGeometry.setFromPoints(points);
 
-    const line = new THREE.Line(
-      lineGeometry,
-      seamMaterial,
-    );
+    const line = new THREE.Line(lineGeometry, seamMaterial);
 
     line.name = `GarmentSeam_${seam.id}`;
-
     line.userData.isVisualOnly = true;
-
     line.userData.excludeFromClothSimulation = true;
-
     line.userData.seamId = seam.id;
-
     line.userData.seamName = seam.name;
 
-    /**
-     * Referência para sincronização futura com a malha.
-     */
-    line.userData.sourceVertexIndices =
-      seam.edgeA.map(
-        (index) => panelOffset + index,
-      );
+    line.userData.sourceVertexIndices = seam.edgeA.map(
+      (index) => panelOffset + index,
+    );
 
     detailsGroup.add(line);
-
     createdLineCount++;
   }
 
@@ -1220,38 +1149,23 @@ function createSeamVisualDetails(
     return null;
   }
 
-  detailsGroup.userData.seamLineCount =
-    createdLineCount;
-
-  detailsGroup.userData.seamMaterial =
-    seamMaterial;
+  detailsGroup.userData.seamLineCount = createdLineCount;
+  detailsGroup.userData.seamMaterial = seamMaterial;
 
   return detailsGroup;
 }
 
-/**
- * SINCRONIZAÇÃO DOS DETALHES VISUAIS
- *
- * Deve ser chamada depois de atualizar a malha física.
- */
+/* -------------------------------------------------------------------------- */
+/*                     ATUALIZAÇÃO DOS DETALHES VISUAIS                       */
+/* -------------------------------------------------------------------------- */
 
 export function updateGarmentVisualDetails(
   group: THREE.Group,
 ): void {
-  const details = group.getObjectByName(
-    'GarmentVisualDetails',
-  );
+  const details = group.getObjectByName('GarmentVisualDetails');
+  const physicalMesh = group.getObjectByName('AssembledGarmentMesh');
 
-  const physicalMesh = group.getObjectByName(
-    'AssembledGarmentMesh',
-  );
-
-  if (
-    !details ||
-    !(physicalMesh instanceof THREE.Mesh)
-  ) {
-    return;
-  }
+  if (!details || !(physicalMesh instanceof THREE.Mesh)) return;
 
   const geometry = physicalMesh.geometry;
 
@@ -1263,9 +1177,7 @@ export function updateGarmentVisualDetails(
     'normal',
   ) as THREE.BufferAttribute | undefined;
 
-  if (!positionAttribute) {
-    return;
-  }
+  if (!positionAttribute) return;
 
   const surfaceOffset = Math.max(
     (geometry.boundingSphere?.radius ?? 0) * 0.00035,
@@ -1279,16 +1191,13 @@ export function updateGarmentVisualDetails(
     .invert();
 
   for (const child of details.children) {
-    if (!(child instanceof THREE.Line)) {
-      continue;
-    }
+    if (!(child instanceof THREE.Line)) continue;
 
-    const indices = child.userData
-      .sourceVertexIndices as number[] | undefined;
+    const indices = child.userData.sourceVertexIndices as
+      | number[]
+      | undefined;
 
-    if (!indices?.length) {
-      continue;
-    }
+    if (!indices?.length) continue;
 
     const lineGeometry = child.geometry;
 
@@ -1296,10 +1205,7 @@ export function updateGarmentVisualDetails(
       'position',
     ) as THREE.BufferAttribute | undefined;
 
-    if (
-      !linePosition ||
-      linePosition.count !== indices.length
-    ) {
+    if (!linePosition || linePosition.count !== indices.length) {
       continue;
     }
 
@@ -1327,38 +1233,24 @@ export function updateGarmentVisualDetails(
         );
 
         if (normal.lengthSq() > EPSILON * EPSILON) {
-          point.addScaledVector(
-            normal.normalize(),
-            surfaceOffset,
-          );
+          point.addScaledVector(normal.normalize(), surfaceOffset);
         }
       }
 
-      /**
-       * Converte da coordenadas locais da malha
-       * para coordenadas locais do grupo visual.
-       */
       physicalMesh.localToWorld(point);
-
       point.applyMatrix4(inverseDetailsMatrix);
 
-      linePosition.setXYZ(
-        i,
-        point.x,
-        point.y,
-        point.z,
-      );
+      linePosition.setXYZ(i, point.x, point.y, point.z);
     }
 
     linePosition.needsUpdate = true;
-
     lineGeometry.computeBoundingSphere();
   }
 }
 
-/**
- * MONTAGEM PRINCIPAL
- */
+/* -------------------------------------------------------------------------- */
+/*                              MONTAGEM PRINCIPAL                            */
+/* -------------------------------------------------------------------------- */
 
 export function assembleGarment(
   meshData: GarmentMeshData,
@@ -1375,13 +1267,10 @@ export function assembleGarment(
   }
 
   if (!Array.isArray(meshData.seams)) {
-    throw new Error(
-      'CAIMENT: lista de costuras inválida.',
-    );
+    throw new Error('CAIMENT: lista de costuras inválida.');
   }
 
   const geometry = createAssembledGeometry(meshData);
-
   const fabricOptions = options.fabric;
 
   const material =
@@ -1397,25 +1286,17 @@ export function assembleGarment(
       wireframe: fabricOptions?.wireframe ?? false,
     });
 
-  const mesh = new THREE.Mesh(
-    geometry,
-    material,
-  );
+  const mesh = new THREE.Mesh(geometry, material);
 
   mesh.name = 'AssembledGarmentMesh';
-
   mesh.castShadow = true;
-
   mesh.receiveShadow = true;
-
   mesh.userData.isPhysicalGarmentMesh = true;
-
   mesh.userData.isVisualOnly = false;
 
   const group = new THREE.Group();
 
   group.name = 'AssembledGarment';
-
   group.add(mesh);
 
   const visualDetails = createSeamVisualDetails(
@@ -1428,17 +1309,13 @@ export function assembleGarment(
   }
 
   group.userData.meshData = meshData;
-
   group.userData.isAssembled = true;
-
-  group.userData.garmentFit =
-    meshData.fit ?? null;
+  group.userData.garmentFit = meshData.fit ?? null;
 
   group.userData.assembledGarmentRegions =
     geometry.userData.assembledGarmentRegions;
 
-  group.userData.seamDiagnostics =
-    geometry.userData.seamDiagnostics;
+  group.userData.seamDiagnostics = geometry.userData.seamDiagnostics;
 
   group.userData.weldedVertexGroupCount =
     geometry.userData.weldedVertexGroupCount;
@@ -1446,14 +1323,16 @@ export function assembleGarment(
   group.userData.weldedVertexCount =
     geometry.userData.weldedVertexCount;
 
-  group.userData.weldGroups =
-    geometry.userData.weldGroups;
+  group.userData.weldGroups = geometry.userData.weldGroups;
+  group.userData.weldConstraints = geometry.userData.weldConstraints;
 
-  group.userData.weldConstraints =
-    geometry.userData.weldConstraints;
+  group.userData.weldConstraintCount =
+    geometry.userData.weldConstraintCount;
 
-  group.userData.openBoundaryEdges =
-    geometry.userData.openBoundaryEdges;
+  group.userData.vertexMasses = geometry.userData.vertexMasses;
+  group.userData.vertexMassCount = geometry.userData.vertexMassCount;
+
+  group.userData.openBoundaryEdges = geometry.userData.openBoundaryEdges;
 
   group.userData.openBoundaryEdgeCount =
     geometry.userData.openBoundaryEdgeCount;
@@ -1467,8 +1346,7 @@ export function assembleGarment(
   group.userData.boundaryDefinitions =
     geometry.userData.boundaryDefinitions;
 
-  group.userData.hasVisualSeamDetails =
-    Boolean(visualDetails);
+  group.userData.hasVisualSeamDetails = Boolean(visualDetails);
 
   group.updateMatrixWorld(true);
 
@@ -1478,8 +1356,6 @@ export function assembleGarment(
     panels: meshData.panels,
     seams: meshData.seams,
     vertexCount: geometry.getAttribute('position').count,
-    triangleCount: geometry.index
-      ? geometry.index.count / 3
-      : 0,
+    triangleCount: geometry.index ? geometry.index.count / 3 : 0,
   };
 }
