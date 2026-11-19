@@ -1,4 +1,3 @@
-
 /*
 ============================================================
 CAIMENT — AvatarViewer
@@ -62,12 +61,10 @@ import type {
 import {
   Box3,
   Group,
-  Raycaster,
   Vector3,
 } from 'three';
 
 import type {
-  Intersection,
   Material,
   Mesh,
   Object3D,
@@ -214,25 +211,39 @@ const VALID_GARMENT_TYPES: GarmentType[] = [
   'pants',
 ];
 
-const SURFACE_RAY_MARGIN = 0.05;
-
 const MIN_RADIAL_DISTANCE = 0.0001;
 
 /**
- * Quantização angular dos raios.
+ * Resolução angular do perfil de superfície do avatar.
  *
- * 1440 divisões representam intervalos de 0,25 grau.
- * Vértices com direções próximas reutilizam o mesmo raio.
+ * 720 divisões representam intervalos de 0,5 grau.
  */
-const CLEARANCE_ANGLE_DIVISIONS = 1440;
+const CLEARANCE_ANGLE_DIVISIONS = 720;
 
 /**
- * Quantização vertical.
+ * Quantização vertical do perfil de superfície.
  *
- * Vértices separados por até aproximadamente 1 cm
- * podem reutilizar o resultado de uma interseção.
+ * Cada "fatia" do perfil cobre aproximadamente 1 cm de altura.
  */
 const CLEARANCE_HEIGHT_STEP = 0.01;
+
+/**
+ * Espaçamento máximo (em unidades da cena) entre as amostras
+ * geradas dentro de cada triângulo do avatar ao montar o perfil.
+ */
+const SURFACE_SAMPLE_SPACING = 0.004;
+
+/**
+ * Limite de subdivisões por aresta de triângulo.
+ * Protege contra malhas com triângulos gigantes.
+ */
+const SURFACE_MAX_TRIANGLE_DIVISIONS = 40;
+
+/**
+ * Limite de fatias verticais do perfil (proteção contra
+ * caixas delimitadoras inválidas).
+ */
+const SURFACE_MAX_HEIGHT_LEVELS = 20000;
 
 // ============================================================
 // LIBERAÇÃO DE RECURSOS THREE.JS
@@ -831,6 +842,205 @@ function collectAvatarSurfaceMeshes(
 }
 
 // ============================================================
+// PERFIL RADIAL DA SUPERFÍCIE DO AVATAR
+// ============================================================
+
+interface AvatarSurfaceProfile {
+  /** Maior distância radial por (altura, ângulo). -1 = sem dados. */
+  data: Float32Array;
+  minHeightIndex: number;
+  heightLevels: number;
+  filledBins: number;
+}
+
+const avatarSurfaceProfileCache = new WeakMap<
+  Object3D,
+  { key: string; profile: AvatarSurfaceProfile }
+>();
+
+function getAvatarSurfaceProfile(
+  avatar: Object3D,
+  avatarMeshes: Mesh[],
+  center: Vector3,
+  box: Box3,
+  angleStep: number,
+): AvatarSurfaceProfile | null {
+  const cacheKey = [
+    center.x,
+    center.z,
+    box.min.y,
+    box.max.y,
+    CLEARANCE_ANGLE_DIVISIONS,
+    CLEARANCE_HEIGHT_STEP,
+  ]
+    .map((value) => value.toFixed(5))
+    .join('|');
+
+  const cached = avatarSurfaceProfileCache.get(avatar);
+
+  if (cached && cached.key === cacheKey) {
+    return cached.profile;
+  }
+
+  const minHeightIndex =
+    Math.floor(box.min.y / CLEARANCE_HEIGHT_STEP) - 1;
+
+  const maxHeightIndex =
+    Math.ceil(box.max.y / CLEARANCE_HEIGHT_STEP) + 1;
+
+  const heightLevels =
+    maxHeightIndex - minHeightIndex + 1;
+
+  if (
+    !Number.isFinite(heightLevels) ||
+    heightLevels <= 0 ||
+    heightLevels > SURFACE_MAX_HEIGHT_LEVELS
+  ) {
+    return null;
+  }
+
+  const data = new Float32Array(
+    heightLevels * CLEARANCE_ANGLE_DIVISIONS,
+  ).fill(-1);
+
+  let filledBins = 0;
+
+  const stamp = (
+    x: number,
+    y: number,
+    z: number,
+  ): void => {
+    const dx = x - center.x;
+    const dz = z - center.z;
+    const radius = Math.hypot(dx, dz);
+
+    if (!Number.isFinite(radius) || !Number.isFinite(y)) {
+      return;
+    }
+
+    const row =
+      Math.round(y / CLEARANCE_HEIGHT_STEP) -
+      minHeightIndex;
+
+    if (row < 0 || row >= heightLevels) {
+      return;
+    }
+
+    let angle = Math.atan2(dz, dx);
+
+    if (angle < 0) {
+      angle += Math.PI * 2;
+    }
+
+    const angleIndex =
+      Math.round(angle / angleStep) %
+      CLEARANCE_ANGLE_DIVISIONS;
+
+    const index =
+      row * CLEARANCE_ANGLE_DIVISIONS + angleIndex;
+
+    const current = data[index] ?? -1;
+
+    if (current < 0) {
+      filledBins++;
+    }
+
+    if (radius > current) {
+      data[index] = radius;
+    }
+  };
+
+  const vertex = new Vector3();
+
+  for (const mesh of avatarMeshes) {
+    const geometry = mesh.geometry;
+    const position = geometry.getAttribute('position');
+
+    if (!position) {
+      continue;
+    }
+
+    const vertexCount = position.count;
+    const world = new Float32Array(vertexCount * 3);
+
+    for (let i = 0; i < vertexCount; i++) {
+      mesh.getVertexPosition(i, vertex);
+      vertex.applyMatrix4(mesh.matrixWorld);
+
+      world[i * 3] = vertex.x;
+      world[i * 3 + 1] = vertex.y;
+      world[i * 3 + 2] = vertex.z;
+    }
+
+    const index = geometry.getIndex();
+
+    const triangleCount = index
+      ? Math.floor(index.count / 3)
+      : Math.floor(vertexCount / 3);
+
+    for (let t = 0; t < triangleCount; t++) {
+      const a = index ? index.getX(t * 3) : t * 3;
+      const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+      const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+
+      const ax = world[a * 3] ?? 0;
+      const ay = world[a * 3 + 1] ?? 0;
+      const az = world[a * 3 + 2] ?? 0;
+
+      const bx = world[b * 3] ?? 0;
+      const by = world[b * 3 + 1] ?? 0;
+      const bz = world[b * 3 + 2] ?? 0;
+
+      const cx = world[c * 3] ?? 0;
+      const cy = world[c * 3 + 1] ?? 0;
+      const cz = world[c * 3 + 2] ?? 0;
+
+      const longestEdge = Math.max(
+        Math.hypot(ax - bx, ay - by, az - bz),
+        Math.hypot(bx - cx, by - cy, bz - cz),
+        Math.hypot(cx - ax, cy - ay, cz - az),
+      );
+
+      const divisions = Math.min(
+        SURFACE_MAX_TRIANGLE_DIVISIONS,
+        Math.max(
+          1,
+          Math.ceil(longestEdge / SURFACE_SAMPLE_SPACING),
+        ),
+      );
+
+      for (let i = 0; i <= divisions; i++) {
+        for (let j = 0; j <= divisions - i; j++) {
+          const u = i / divisions;
+          const v = j / divisions;
+          const w = 1 - u - v;
+
+          stamp(
+            ax * w + bx * u + cx * v,
+            ay * w + by * u + cy * v,
+            az * w + bz * u + cz * v,
+          );
+        }
+      }
+    }
+  }
+
+  const profile: AvatarSurfaceProfile = {
+    data,
+    minHeightIndex,
+    heightLevels,
+    filledBins,
+  };
+
+  avatarSurfaceProfileCache.set(avatar, {
+    key: cacheKey,
+    profile,
+  });
+
+  return profile;
+}
+
+// ============================================================
 // CORREÇÃO OTIMIZADA DA FOLGA
 // ============================================================
 
@@ -841,9 +1051,10 @@ function collectAvatarSurfaceMeshes(
  * Otimizações:
  *
  * 1. Os meshes do avatar são coletados uma única vez.
- * 2. Os raios são lançados diretamente contra essa lista.
- * 3. Direções próximas reutilizam resultados armazenados.
- * 4. Alturas próximas reutilizam resultados armazenados.
+ * 2. A superfície é convertida em um perfil radial
+ *    (altura x ângulo) uma única vez, sem raycast.
+ * 3. O perfil fica em cache enquanto o avatar não mudar.
+ * 4. Cada vértice da roupa apenas consulta o perfil.
  * 5. Cada geometria da roupa é atualizada somente
  *    quando algum vértice realmente é deslocado.
  *
@@ -973,140 +1184,93 @@ function applyAvatarSurfaceClearance(
   }
 
   // ----------------------------------------------------------
-  // 2. PREPARAR O RAYCASTER
-  // ----------------------------------------------------------
-
-  const raycaster = new Raycaster();
-
-  raycaster.near = 0;
-
-  const intersections: Intersection<Object3D>[] = [];
-
-  const rayOrigin = new Vector3();
-  const rayDirection = new Vector3();
-
-  const localVertex = new Vector3();
-  const worldVertex = new Vector3();
-
-  const angleStep =
-    (Math.PI * 2) / CLEARANCE_ANGLE_DIVISIONS;
-
-  const rayStartDistance =
-    maximumRadius +
-    clearance +
-    SURFACE_RAY_MARGIN;
-
-  raycaster.far =
-    rayStartDistance +
-    maximumRadius +
-    SURFACE_RAY_MARGIN;
-
-  // ----------------------------------------------------------
-  // 3. CACHE DE INTERSEÇÕES
+  // 2. PERFIL RADIAL DA SUPERFÍCIE (CALCULADO UMA ÚNICA VEZ)
   // ----------------------------------------------------------
 
   /**
-   * Guarda a distância radial da superfície para cada
-   * combinação de direção angular e altura.
+   * Em vez de lançar um raio por combinação de direção e altura
+   * (centenas de milhares de raios contra a malha inteira do
+   * avatar, o que congelava a página), percorremos os triângulos
+   * do avatar uma única vez e guardamos, para cada par
+   * (altura, ângulo), a MAIOR distância radial da superfície.
    *
-   * null também é armazenado quando não existe interseção,
-   * evitando repetir raios que já falharam.
+   * Um raio horizontal lançado de fora para o centro sempre
+   * atinge primeiro o ponto mais distante do centro naquela
+   * direção e altura, portanto o resultado é equivalente.
    */
-  const surfaceDistanceCache =
-    new Map<string, number | null>();
+  const angleStep =
+    (Math.PI * 2) / CLEARANCE_ANGLE_DIVISIONS;
+
+  const surfaceProfile = getAvatarSurfaceProfile(
+    avatar,
+    avatarMeshes,
+    center,
+    box,
+    angleStep,
+  );
+
+  if (!surfaceProfile) {
+    console.warn(
+      'Não foi possível montar o perfil de superfície do avatar.',
+    );
+
+    result.durationMs =
+      performance.now() - startedAt;
+
+    return result;
+  }
+
+  result.intersectedRays = surfaceProfile.filledBins;
+  result.cacheMisses = surfaceProfile.filledBins;
 
   const getSurfaceDistance = (
     angleIndex: number,
     heightIndex: number,
   ): number | null => {
-    const cacheKey =
-      `${angleIndex}:${heightIndex}`;
+    result.cacheHits++;
 
-    if (surfaceDistanceCache.has(cacheKey)) {
-      result.cacheHits++;
+    const row =
+      heightIndex - surfaceProfile.minHeightIndex;
 
-      return surfaceDistanceCache.get(cacheKey) ?? null;
+    const readBin = (
+      targetRow: number,
+      targetAngle: number,
+    ): number => {
+      if (
+        targetRow < 0 ||
+        targetRow >= surfaceProfile.heightLevels
+      ) {
+        return -1;
+      }
+
+      const wrappedAngle =
+        (targetAngle + CLEARANCE_ANGLE_DIVISIONS) %
+        CLEARANCE_ANGLE_DIVISIONS;
+
+      return surfaceProfile.data[
+        targetRow * CLEARANCE_ANGLE_DIVISIONS +
+          wrappedAngle
+      ] ?? -1;
+    };
+
+    let distance = readBin(row, angleIndex);
+
+    // Faixa sem amostra: usa a maior distância das vizinhas.
+    if (distance < 0) {
+      for (let dRow = -1; dRow <= 1; dRow++) {
+        for (let dAngle = -1; dAngle <= 1; dAngle++) {
+          distance = Math.max(
+            distance,
+            readBin(
+              row + dRow,
+              angleIndex + dAngle,
+            ),
+          );
+        }
+      }
     }
 
-    result.cacheMisses++;
-
-    const angle = angleIndex * angleStep;
-
-    rayDirection.set(
-      Math.cos(angle),
-      0,
-      Math.sin(angle),
-    );
-
-    rayOrigin.set(
-      center.x +
-        rayDirection.x * rayStartDistance,
-      heightIndex * CLEARANCE_HEIGHT_STEP,
-      center.z +
-        rayDirection.z * rayStartDistance,
-    );
-
-    raycaster.set(
-      rayOrigin,
-      rayDirection.clone().negate(),
-    );
-
-    intersections.length = 0;
-
-    /**
-     * Não utiliza intersectObject(avatar, true).
-     *
-     * Os meshes já foram coletados anteriormente.
-     * Isso evita percorrer novamente a hierarquia do avatar
-     * para cada vértice da roupa.
-     */
-    raycaster.intersectObjects(
-      avatarMeshes,
-      false,
-      intersections,
-    );
-
-    if (intersections.length === 0) {
-      surfaceDistanceCache.set(cacheKey, null);
-
-      return null;
-    }
-
-    const intersection = intersections[0];
-
-    if (!intersection) {
-      surfaceDistanceCache.set(cacheKey, null);
-
-      return null;
-    }
-
-    result.intersectedRays++;
-
-    const surfaceDx =
-      intersection.point.x - center.x;
-
-    const surfaceDz =
-      intersection.point.z - center.z;
-
-    const surfaceDistance =
-      surfaceDx * rayDirection.x +
-      surfaceDz * rayDirection.z;
-
-    if (
-      !Number.isFinite(surfaceDistance) ||
-      surfaceDistance < 0
-    ) {
-      surfaceDistanceCache.set(cacheKey, null);
-
-      return null;
-    }
-
-    surfaceDistanceCache.set(
-      cacheKey,
-      surfaceDistance,
-    );
-
-    return surfaceDistance;
+    return distance < 0 ? null : distance;
   };
 
   // ----------------------------------------------------------
@@ -1126,6 +1290,11 @@ function applyAvatarSurfaceClearance(
       clothingMeshes.push(mesh);
     }
   });
+
+  // Vetores reutilizáveis para converter coordenadas
+  // locais e mundiais durante o processamento da roupa.
+  const localVertex = new Vector3();
+  const worldVertex = new Vector3();
 
   for (const mesh of clothingMeshes) {
     const geometry = mesh.geometry;
@@ -1291,7 +1460,7 @@ function applyAvatarSurfaceClearance(
       intersectedRays: result.intersectedRays,
       cacheHits: result.cacheHits,
       cacheMisses: result.cacheMisses,
-      cacheEntries: surfaceDistanceCache.size,
+      cacheEntries: surfaceProfile.filledBins,
       avatarMeshes: avatarMeshes.length,
       clothingMeshes: clothingMeshes.length,
       durationMs: Number(
