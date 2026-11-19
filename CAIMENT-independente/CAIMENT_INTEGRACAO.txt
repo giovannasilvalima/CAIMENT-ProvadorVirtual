@@ -1,0 +1,4819 @@
+
+
+========== backend/src/components/avatar/AvatarViewer.tsx ==========
+
+/*
+============================================================
+CAIMENT — AvatarViewer
+============================================================
+
+REGRA FIXA DE EIXOS DA ROUPA
+
+Blender/GLB → VSCode/Three.js
+
+GLB X → Three X = largura
+GLB Y → Three Z = profundidade
+GLB Z → Three Y = altura
+
+No AvatarViewer:
+
+X = largura
+Y = altura
+Z = profundidade
+
+IMPORTANTE:
+- Não trocar largura, altura e profundidade.
+- Não interpretar GLB Y como altura.
+- Não interpretar GLB Z como profundidade.
+- A conversão de eixos é feita pela orientação da roupa.
+- Depois da conversão, todo cálculo usa X/largura,
+  Y/altura e Z/profundidade.
+- As medidas cadastradas da camiseta permanecem com
+  os mesmos valores definidos no código.
+- As Shape Keys permanecem dentro do GLB.
+- O AvatarViewer não altera Shape Keys.
+============================================================
+*/
+
+import {
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+
+import {
+  Canvas,
+  useThree,
+} from '@react-three/fiber';
+
+import {
+  OrbitControls,
+  ContactShadows,
+} from '@react-three/drei';
+
+import type {
+  OrbitControls as OrbitControlsImpl,
+} from 'three-stdlib';
+
+import type {
+  UserMeasurements,
+} from '@/types/measurements';
+
+import {
+  Box3,
+  Vector3,
+} from 'three';
+
+import type {
+  Group,
+  Mesh,
+  Object3D,
+} from 'three';
+
+import {
+  GLTFLoader,
+} from 'three/examples/jsm/loaders/GLTFLoader.js';
+
+import {
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+
+import {
+  AvatarPlaceholderModel,
+} from './AvatarPlaceholderModel';
+
+import {
+  LoadingState,
+} from '@/components/ui/LoadingState';
+
+import {
+  ErrorBoundary,
+} from '@/components/ui/ErrorBoundary';
+
+import {
+  ClothingDeformer,
+  type ClothingMeasurements,
+} from '../../../../src/services/clothing/ClothingDeformer';
+
+interface AvatarViewerProps {
+  modelUrl?: string | null;
+  clothingModelUrl?: string | null;
+  measurements?: UserMeasurements | null;
+  className?: string;
+  showControls?: boolean;
+}
+
+interface AvatarFitData {
+  box: Box3;
+  size: Vector3;
+  center: Vector3;
+}
+
+// ============================================================
+// REGRA FIXA DE EIXOS — CAIMENT
+// ============================================================
+
+const CLOTHING_VISUAL_ROTATION_Y =
+  Math.PI / 2;
+
+type ClothingPlacement =
+  | 'ombros'
+  | 'cintura';
+
+interface ClothingProfile {
+  measurements: {
+    largura?: number;
+    profundidade?: number;
+    comprimento?: number;
+    manga?: number;
+  };
+  placement: ClothingPlacement;
+}
+
+// ============================================================
+// URL DO MODELO DO AVATAR
+// ============================================================
+
+function getModelProxyUrl(
+  modelUrl: string
+): string {
+  return `/api/avatar/model?url=${encodeURIComponent(
+    modelUrl
+  )}`;
+}
+
+// ============================================================
+// CARREGA O AVATAR
+// ============================================================
+
+function RealModel({
+  url,
+  onLoaded,
+  onError,
+  onFitData,
+}: {
+  url: string;
+  onLoaded?: () => void;
+  onError?: (error: unknown) => void;
+  onFitData?: (
+    data: AvatarFitData
+  ) => void;
+}) {
+  const [model, setModel] =
+    useState<Object3D | null>(null);
+
+  const onLoadedRef =
+    useRef(onLoaded);
+
+  const onErrorRef =
+    useRef(onError);
+
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+  }, [onLoaded]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!url) {
+      console.error(
+        '❌ URL do avatar está vazia.'
+      );
+
+      onErrorRef.current?.(
+        new Error(
+          'URL do avatar está vazia.'
+        )
+      );
+
+      return;
+    }
+
+    const proxyUrl =
+      getModelProxyUrl(url);
+
+    console.log(
+      '🎯 Carregando avatar:',
+      proxyUrl
+    );
+
+    const loader =
+      new GLTFLoader();
+
+    loader.load(
+      proxyUrl,
+
+      (gltf) => {
+        if (cancelled) {
+          return;
+        }
+
+        let meshCount = 0;
+
+        gltf.scene.traverse(
+          (child) => {
+            const mesh =
+              child as Mesh;
+
+            if (!mesh.isMesh) {
+              return;
+            }
+
+            meshCount++;
+
+            mesh.visible = true;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+
+            if (mesh.material) {
+              const materials =
+                Array.isArray(mesh.material)
+                  ? mesh.material
+                  : [mesh.material];
+
+              materials.forEach(
+                (material) => {
+                  material.visible = true;
+                  material.needsUpdate = true;
+                }
+              );
+            }
+          }
+        );
+
+        if (meshCount === 0) {
+          onErrorRef.current?.(
+            new Error(
+              'O modelo 3D não possui meshes.'
+            )
+          );
+
+          return;
+        }
+
+        setModel(gltf.scene);
+
+        console.log(
+          '✅ Avatar 3D carregado.'
+        );
+
+        onLoadedRef.current?.();
+      },
+
+      undefined,
+
+      (error) => {
+        if (cancelled) {
+          return;
+        }
+
+        console.error(
+          '❌ Erro ao carregar avatar:',
+          error
+        );
+
+        onErrorRef.current?.(
+          error
+        );
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  if (!model) {
+    return null;
+  }
+
+  return (
+    <AvatarModelObject
+      model={model}
+      onFitData={onFitData}
+    />
+  );
+}
+
+// ============================================================
+// AJUSTA O AVATAR
+// ============================================================
+
+function AvatarModelObject({
+  model,
+  onFitData,
+}: {
+  model: Object3D;
+  onFitData?: (
+    data: AvatarFitData
+  ) => void;
+}) {
+  const groupRef =
+    useRef<Group | null>(null);
+
+  useEffect(() => {
+    const group =
+      groupRef.current;
+
+    if (!group || !model) {
+      return;
+    }
+
+    group.scale.setScalar(1);
+
+    group.position.set(
+      0,
+      0,
+      0
+    );
+
+    group.rotation.set(
+      0,
+      0,
+      0
+    );
+
+    group.updateMatrixWorld(true);
+
+    const originalBox =
+      new Box3().setFromObject(group);
+
+    const originalSize =
+      new Vector3();
+
+    originalBox.getSize(
+      originalSize
+    );
+
+    if (originalSize.y <= 0) {
+      console.error(
+        '❌ Altura do avatar inválida.'
+      );
+
+      return;
+    }
+
+    const targetHeight = 3.4;
+
+    const scale =
+      targetHeight /
+      originalSize.y;
+
+    group.scale.setScalar(scale);
+
+    group.updateMatrixWorld(true);
+
+    const scaledBox =
+      new Box3().setFromObject(group);
+
+    const scaledCenter =
+      new Vector3();
+
+    const scaledSize =
+      new Vector3();
+
+    scaledBox.getCenter(
+      scaledCenter
+    );
+
+    scaledBox.getSize(
+      scaledSize
+    );
+
+    group.position.x =
+      -scaledCenter.x;
+
+    group.position.z =
+      -scaledCenter.z;
+
+    group.position.y =
+      -scaledBox.min.y;
+
+    group.updateMatrixWorld(true);
+
+    const finalBox =
+      new Box3().setFromObject(group);
+
+    const finalSize =
+      new Vector3();
+
+    const finalCenter =
+      new Vector3();
+
+    finalBox.getSize(
+      finalSize
+    );
+
+    finalBox.getCenter(
+      finalCenter
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '🧍 AVATAR AJUSTADO'
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '📐 Dimensão original:',
+      {
+        x: originalSize.x,
+        y: originalSize.y,
+        z: originalSize.z,
+      }
+    );
+
+    console.log(
+      '📐 Escala do avatar:',
+      scale
+    );
+
+    console.log(
+      '📐 Dimensão final:',
+      {
+        x: finalSize.x,
+        y: finalSize.y,
+        z: finalSize.z,
+      }
+    );
+
+    console.log(
+      '📍 Centro final:',
+      {
+        x: finalCenter.x,
+        y: finalCenter.y,
+        z: finalCenter.z,
+      }
+    );
+
+    onFitData?.({
+      box: finalBox.clone(),
+      size: finalSize.clone(),
+      center: finalCenter.clone(),
+    });
+  }, [
+    model,
+    onFitData,
+  ]);
+
+  return (
+    <group ref={groupRef}>
+      <primitive
+        object={model}
+      />
+    </group>
+  );
+}
+
+// ============================================================
+// CARREGA, DEFORMA E VESTE A ROUPA
+// ============================================================
+
+function ClothingModel({
+  url,
+  measurements,
+  avatarFitData,
+}: {
+  url: string;
+  measurements?: UserMeasurements | null;
+  avatarFitData: AvatarFitData;
+}) {
+  const [model, setModel] =
+    useState<Object3D | null>(null);
+
+  const [deformedUrl, setDeformedUrl] =
+    useState<string | null>(null);
+
+  const groupRef =
+    useRef<Group | null>(null);
+
+  // ==========================================================
+  // DEFORMA A ROUPA
+  // ==========================================================
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const deform = async () => {
+      if (!measurements) {
+        console.warn(
+          '⚠️ Medidas do usuário não disponíveis para deformação.'
+        );
+
+        return;
+      }
+
+      try {
+        console.log(
+          '===================================='
+        );
+
+        console.log(
+          '👕 INICIANDO DEFORMAÇÃO DA ROUPA'
+        );
+
+        console.log(
+          '===================================='
+        );
+
+        const clothingMeasurements: ClothingMeasurements = {
+          altura:
+            measurements.altura,
+
+          ombros:
+            measurements.ombros,
+
+          torax:
+            measurements.torax,
+
+          busto:
+            measurements.busto,
+
+          cintura:
+            measurements.cintura,
+
+          quadril:
+            measurements.quadril,
+        };
+
+        console.log(
+          '📏 Medidas enviadas para ClothingDeformer:',
+          clothingMeasurements
+        );
+
+        const deformer =
+          new ClothingDeformer();
+
+        const result =
+          await deformer.deform(
+            url,
+            clothingMeasurements
+          );
+
+        if (cancelled) {
+          result.revoke();
+          return;
+        }
+
+        console.log(
+          '✅ GLB deformado recebido.'
+        );
+
+        console.log(
+          '👕 URL da roupa deformada:',
+          result.url
+        );
+
+        setDeformedUrl(
+          result.url
+        );
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        console.error(
+          '❌ Erro ao deformar roupa:',
+          error
+        );
+
+        setDeformedUrl(null);
+      }
+    };
+
+    deform();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    url,
+    measurements,
+  ]);
+
+  // ==========================================================
+  // CARREGA O GLB DEFORMADO
+  // ==========================================================
+
+  useEffect(() => {
+    if (!deformedUrl) {
+      setModel(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loader =
+      new GLTFLoader();
+
+    console.log(
+      '👕 Carregando GLB DEFORMADO no AvatarViewer:',
+      deformedUrl
+    );
+
+    loader.load(
+      deformedUrl,
+
+      (gltf) => {
+        if (cancelled) {
+          return;
+        }
+
+        console.log(
+          '✅ Roupa DEFORMADA carregada no AvatarViewer.'
+        );
+
+        gltf.scene.traverse(
+          (child) => {
+            const mesh =
+              child as Mesh;
+
+            if (!mesh.isMesh) {
+              return;
+            }
+
+            mesh.visible = true;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+          }
+        );
+
+        setModel(
+          gltf.scene
+        );
+      },
+
+      undefined,
+
+      (error) => {
+        if (cancelled) {
+          return;
+        }
+
+        console.error(
+          '❌ Erro ao carregar GLB deformado:',
+          error
+        );
+
+        setModel(null);
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    deformedUrl,
+  ]);
+
+  // ==========================================================
+  // LIMPA O GLB DEFORMADO ANTERIOR
+  // ==========================================================
+
+  useEffect(() => {
+    return () => {
+      if (deformedUrl) {
+        URL.revokeObjectURL(
+          deformedUrl
+        );
+      }
+    };
+  }, [
+    deformedUrl,
+  ]);
+
+  // ==========================================================
+  // ESCALA, ORIENTAÇÃO E POSICIONAMENTO
+  //
+  // NÃO ALTERA SHAPE KEYS.
+  // ==========================================================
+
+  useEffect(() => {
+    const group =
+      groupRef.current;
+
+    if (!group || !model) {
+      return;
+    }
+
+    if (!measurements) {
+      console.warn(
+        '⚠️ Medidas do usuário não disponíveis.'
+      );
+
+      return;
+    }
+
+    const medidas =
+      measurements;
+
+    // ========================================================
+    // CADASTRO DA CAMISETA P
+    // ========================================================
+
+    const CAMISETA_P: ClothingProfile = {
+      measurements: {
+        largura: 100,
+        profundidade: 29.7,
+        comprimento: 70,
+        manga: 23,
+      },
+
+      placement: 'ombros',
+    };
+
+    // ========================================================
+    // RESET
+    // ========================================================
+
+    group.scale.set(
+      1,
+      1,
+      1
+    );
+
+    group.position.set(
+      0,
+      0,
+      0
+    );
+
+    group.rotation.set(
+      0,
+      0,
+      0
+    );
+
+    group.updateMatrixWorld(true);
+
+    // ========================================================
+    // MEDE A ROUPA DEFORMADA
+    // ========================================================
+
+    const clothingBoxBase =
+      new Box3().setFromObject(
+        model
+      );
+
+    const clothingSizeBase =
+      new Vector3();
+
+    clothingBoxBase.getSize(
+      clothingSizeBase
+    );
+
+    if (
+      clothingSizeBase.x <= 0 ||
+      clothingSizeBase.y <= 0 ||
+      clothingSizeBase.z <= 0
+    ) {
+      console.error(
+        '❌ Dimensão física inicial da roupa deformada inválida.'
+      );
+
+      return;
+    }
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '👕 DIMENSÕES DO GLB DEFORMADO'
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '📐 X:',
+      clothingSizeBase.x
+    );
+
+    console.log(
+      '📐 Y:',
+      clothingSizeBase.y
+    );
+
+    console.log(
+      '📐 Z:',
+      clothingSizeBase.z
+    );
+
+    // ========================================================
+    // ESCALA FÍSICA BASE
+    // ========================================================
+
+    const larguraRoupaCm =
+      CAMISETA_P.measurements.largura;
+
+    const comprimentoRoupaCm =
+      CAMISETA_P.measurements.comprimento;
+
+    if (
+      larguraRoupaCm === undefined ||
+      comprimentoRoupaCm === undefined ||
+      larguraRoupaCm <= 0 ||
+      comprimentoRoupaCm <= 0
+    ) {
+      console.error(
+        '❌ Medidas físicas da camiseta não cadastradas corretamente.'
+      );
+
+      return;
+    }
+
+    const larguraRoupaBaseM =
+      larguraRoupaCm / 100;
+
+    const escalaFisicaBase =
+      larguraRoupaBaseM /
+      clothingSizeBase.x;
+
+    group.scale.set(
+      escalaFisicaBase,
+      escalaFisicaBase,
+      escalaFisicaBase
+    );
+
+    group.updateMatrixWorld(
+      true
+    );
+
+    const clothingBoxPhysical =
+      new Box3().setFromObject(
+        group
+      );
+
+    const clothingSizePhysical =
+      new Vector3();
+
+    clothingBoxPhysical.getSize(
+      clothingSizePhysical
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '📐 ESCALA FÍSICA BASE DA ROUPA DEFORMADA'
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '📏 Largura cadastrada:',
+      larguraRoupaCm,
+      'cm'
+    );
+
+    console.log(
+      '📏 Largura GLB deformado:',
+      clothingSizeBase.x,
+      'm'
+    );
+
+    console.log(
+      '📐 Escala física base:',
+      escalaFisicaBase
+    );
+
+    console.log(
+      '📐 Dimensão física inicial:',
+      {
+        largura:
+          clothingSizePhysical.x * 100,
+
+        altura:
+          clothingSizePhysical.y * 100,
+
+        profundidade:
+          clothingSizePhysical.z * 100,
+      }
+    );
+
+    // ========================================================
+    // ORIENTAÇÃO
+    //
+    // GLB X → Three X = largura
+    // GLB Y → Three Z = profundidade
+    // GLB Z → Three Y = altura
+    // ========================================================
+
+    group.rotation.set(
+      0,
+      CLOTHING_VISUAL_ROTATION_Y,
+      0
+    );
+
+    group.updateMatrixWorld(true);
+
+    // ========================================================
+    // MEDE A ROUPA ORIENTADA
+    // ========================================================
+
+    const orientedBox =
+      new Box3().setFromObject(
+        group
+      );
+
+    const orientedSize =
+      new Vector3();
+
+    orientedBox.getSize(
+      orientedSize
+    );
+
+    if (
+      orientedSize.x <= 0 ||
+      orientedSize.y <= 0 ||
+      orientedSize.z <= 0
+    ) {
+      console.error(
+        '❌ Dimensão orientada da roupa inválida.'
+      );
+
+      return;
+    }
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '👕 ROUPA DEFORMADA APÓS ORIENTAÇÃO'
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '📐 Dimensão orientada:',
+      {
+        x: orientedSize.x,
+        y: orientedSize.y,
+        z: orientedSize.z,
+      }
+    );
+
+    // ========================================================
+    // ESCALA DA CAMISETA
+    // ========================================================
+
+    const alturaAvatar =
+      avatarFitData.size.y;
+
+    const alturaUsuarioCm =
+      medidas.altura;
+
+    if (
+      alturaUsuarioCm === undefined ||
+      alturaUsuarioCm <= 0
+    ) {
+      console.error(
+        '❌ Altura inteira do usuário inválida para calcular a escala da camiseta.'
+      );
+
+      return;
+    }
+
+    const alturaCamisetaCatalogoCm =
+      CAMISETA_P.measurements.comprimento ??
+      70;
+
+    const alturaCamisetaCatalogoM =
+      alturaCamisetaCatalogoCm / 100;
+
+    const alturaAlvo =
+      alturaAvatar *
+      (
+        alturaCamisetaCatalogoM /
+        (alturaUsuarioCm / 100)
+      );
+
+    const alturaBaseCamisetaM =
+      0.70;
+
+    const escalaUniforme =
+      alturaAlvo /
+      alturaBaseCamisetaM;
+
+    group.scale.setScalar(
+      escalaUniforme
+    );
+
+    group.updateMatrixWorld(true);
+
+    // ========================================================
+    // MEDE APÓS ESCALA
+    // ========================================================
+
+    const scaledBox =
+      new Box3().setFromObject(
+        group
+      );
+
+    const scaledSize =
+      new Vector3();
+
+    const scaledCenter =
+      new Vector3();
+
+    scaledBox.getSize(
+      scaledSize
+    );
+
+    scaledBox.getCenter(
+      scaledCenter
+    );
+
+    console.log(
+      '🧩 ÂNCORA DA CAMISETA DEFORMADA'
+    );
+
+    console.log(
+      'Box min Y:',
+      scaledBox.min.y
+    );
+
+    console.log(
+      'Box max Y:',
+      scaledBox.max.y
+    );
+
+    console.log(
+      'Centro Y:',
+      scaledCenter.y
+    );
+
+    console.log(
+      'Altura Y:',
+      scaledSize.y
+    );
+
+    // ========================================================
+    // POSICIONAMENTO
+    // ========================================================
+
+    const alturaOmbrosUsuarioCm =
+      medidas.alturaPeCintura +
+      medidas.alturaCinturaOmbros;
+
+    const alturaOmbrosAvatar =
+      avatarFitData.size.y *
+      (
+        alturaOmbrosUsuarioCm /
+        alturaUsuarioCm
+      );
+
+    const topoOmbrosAvatar =
+      avatarFitData.box.min.y +
+      alturaOmbrosAvatar;
+
+    const posicaoY =
+      topoOmbrosAvatar -
+      scaledBox.max.y;
+
+    group.position.set(
+      avatarFitData.center.x -
+        scaledCenter.x,
+
+      posicaoY,
+
+      avatarFitData.center.z -
+        scaledCenter.z
+    );
+
+    group.updateMatrixWorld(true);
+
+    // ========================================================
+    // DIMENSÃO FINAL
+    // ========================================================
+
+    const finalBox =
+      new Box3().setFromObject(
+        group
+      );
+
+    const finalSize =
+      new Vector3();
+
+    const finalCenter =
+      new Vector3();
+
+    finalBox.getSize(
+      finalSize
+    );
+
+    finalBox.getCenter(
+      finalCenter
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '👕 ROUPA DEFORMADA VESTIDA NO AVATAR'
+    );
+
+    console.log(
+      '===================================='
+    );
+
+    console.log(
+      '🔄 REGRA FIXA DE EIXOS:',
+      {
+        'GLB X → Three X':
+          'largura',
+
+        'GLB Y → Three Z':
+          'profundidade',
+
+        'GLB Z → Three Y':
+          'altura',
+
+        'Three X':
+          'largura',
+
+        'Three Y':
+          'altura',
+
+        'Three Z':
+          'profundidade',
+      }
+    );
+
+    console.log(
+      '🔄 Alinhamento visual aplicado:',
+      '+90° no eixo Y'
+    );
+
+    console.log(
+      '📏 Cadastro da roupa:',
+      CAMISETA_P.measurements
+    );
+
+    console.log(
+      '📐 Dimensão orientada:',
+      {
+        largura:
+          orientedSize.x,
+
+        altura:
+          orientedSize.y,
+
+        profundidade:
+          orientedSize.z,
+      }
+    );
+
+    console.log(
+      '📐 Escala uniforme:',
+      escalaUniforme
+    );
+
+    console.log(
+      '📐 Altura física base da camiseta:',
+      alturaBaseCamisetaM
+    );
+
+    console.log(
+      '🎯 Altura alvo da camiseta:',
+      alturaAlvo
+    );
+
+    console.log(
+      '🧍 Altura inteira do avatar:',
+      alturaAvatar
+    );
+
+    console.log(
+      '🧍 Altura inteira cadastrada:',
+      alturaUsuarioCm
+    );
+
+    console.log(
+      '📐 Altura física cadastrada da camiseta:',
+      alturaCamisetaCatalogoCm
+    );
+
+    console.log(
+      '📐 Dimensão final:',
+      {
+        x: finalSize.x,
+        y: finalSize.y,
+        z: finalSize.z,
+      }
+    );
+
+    console.log(
+      '📍 Centro final:',
+      {
+        x: finalCenter.x,
+        y: finalCenter.y,
+        z: finalCenter.z,
+      }
+    );
+
+    console.log(
+      '📍 Regra de posicionamento:',
+      CAMISETA_P.placement
+    );
+    
+  }, [
+    model,
+    measurements,
+    avatarFitData,
+  ]);
+
+  if (!model) {
+    return null;
+  }
+
+  return (
+    <group ref={groupRef}>
+      <primitive
+        object={model}
+      />
+    </group>
+  );
+}
+
+// ============================================================
+// CENA
+// ============================================================
+
+function Scene({
+  modelUrl,
+  clothingModelUrl,
+  measurements,
+  onAvatarLoaded,
+  onAvatarError,
+}: {
+  modelUrl?: string | null;
+  clothingModelUrl?: string | null;
+  measurements?: UserMeasurements | null;
+  onAvatarLoaded: () => void;
+  onAvatarError: () => void;
+}) {
+  const [
+    avatarFitData,
+    setAvatarFitData,
+  ] =
+    useState<AvatarFitData | null>(
+      null
+    );
+
+  return (
+    <>
+      <hemisphereLight
+        args={[
+          '#F4F1FC',
+          '#6E42D1',
+          0.55,
+        ]}
+      />
+
+      <ambientLight
+        intensity={0.4}
+      />
+
+      <directionalLight
+        position={[3, 5, 4]}
+        intensity={1.2}
+        castShadow
+      />
+
+      <directionalLight
+        position={[-3, 2, -3]}
+        intensity={0.4}
+      />
+
+      <pointLight
+        position={[0, 2.5, -2]}
+        intensity={0.3}
+        color="#C6F24E"
+      />
+
+      <Suspense fallback={null}>
+        {modelUrl ? (
+          <RealModel
+            url={modelUrl}
+            onLoaded={
+              onAvatarLoaded
+            }
+            onError={
+              onAvatarError
+            }
+            onFitData={
+              setAvatarFitData
+            }
+          />
+        ) : (
+          <AvatarPlaceholderModel />
+        )}
+
+        {clothingModelUrl &&
+          avatarFitData && (
+            <ClothingModel
+              url={clothingModelUrl}
+              measurements={measurements}
+              avatarFitData={
+                avatarFitData
+              }
+            />
+          )}
+      </Suspense>
+
+      <ContactShadows
+        position={[0, 0, 0]}
+        opacity={0.35}
+        scale={4}
+        blur={2.4}
+        far={2}
+      />
+    </>
+  );
+}
+
+// ============================================================
+// CONTROLE DA CÂMERA
+// ============================================================
+
+function CameraController() {
+  const { camera } =
+    useThree();
+
+  useEffect(() => {
+    camera.position.set(
+      0,
+      1.7,
+      5.2
+    );
+
+    camera.lookAt(
+      0,
+      1.7,
+      0
+    );
+  }, [camera]);
+
+  return null;
+}
+
+// ============================================================
+// AVATAR VIEWER
+// ============================================================
+
+export function AvatarViewer({
+  modelUrl,
+  clothingModelUrl,
+  measurements,
+  className,
+  showControls = true,
+}: AvatarViewerProps) {
+  const controlsRef =
+    useRef<OrbitControlsImpl | null>(
+      null
+    );
+
+  const [ready, setReady] =
+    useState(false);
+
+  const [modelError, setModelError] =
+    useState(false);
+
+  useEffect(() => {
+    console.log(
+      '🖼️ AvatarViewer modelUrl:',
+      modelUrl
+    );
+
+    setModelError(false);
+    setReady(false);
+  }, [modelUrl]);
+
+  // ==========================================================
+  // RESETA A CÂMERA
+  // ==========================================================
+
+  const handleReset = () => {
+    const controls =
+      controlsRef.current;
+
+    if (!controls) {
+      return;
+    }
+
+    const camera =
+      controls.object;
+
+    camera.position.set(
+      0,
+      1.7,
+      5.2
+    );
+
+    controls.target.set(
+      0,
+      1.7,
+      0
+    );
+
+    controls.update();
+  };
+
+  // ==========================================================
+  // ZOOM
+  // ==========================================================
+
+  const handleZoom = (
+    dir: 1 | -1
+  ) => {
+    const controls =
+      controlsRef.current;
+
+    if (!controls) {
+      return;
+    }
+
+    const camera =
+      controls.object;
+
+    const factor =
+      dir === 1
+        ? 0.85
+        : 1.15;
+
+    camera.position.multiplyScalar(
+      factor
+    );
+
+    controls.update();
+  };
+
+  return (
+    <div
+      className={`relative overflow-hidden rounded-3xl bg-gradient-to-b from-caiment-purple-50 to-white ${
+        className ?? ''
+      }`}
+    >
+      {!ready &&
+        !modelError && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60">
+            <LoadingState
+              label="Carregando avatar..."
+            />
+          </div>
+        )}
+
+      {modelError ? (
+        <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3 p-6 text-center">
+          <div className="text-3xl">
+            ⚠️
+          </div>
+
+          <p className="text-sm font-medium text-caiment-ink">
+            Não foi possível carregar
+            o avatar 3D.
+          </p>
+
+          <p className="max-w-xs text-xs text-caiment-ink-soft">
+            O avatar foi gerado, mas o
+            backend não conseguiu entregar
+            o arquivo 3D ao visualizador.
+          </p>
+        </div>
+      ) : (
+        <ErrorBoundary
+          fallback={
+            <div className="flex h-full min-h-[240px] items-center justify-center p-6 text-center">
+              <p className="text-sm text-caiment-ink-soft">
+                Erro inesperado no
+                visualizador 3D.
+              </p>
+            </div>
+          }
+        >
+          <Canvas
+            shadows
+            camera={{
+              position: [
+                0,
+                0.35,
+                5.2,
+              ],
+              fov: 30,
+            }}
+            onCreated={() => {
+              console.log(
+                '🎥 Canvas criado.'
+              );
+            }}
+          >
+            <CameraController />
+
+            <Scene
+              modelUrl={modelUrl}
+              clothingModelUrl={
+                clothingModelUrl
+              }
+              measurements={
+                measurements
+              }
+              onAvatarLoaded={() => {
+                console.log(
+                  '🎉 Avatar pronto para visualizar!'
+                );
+
+                setReady(true);
+              }}
+              onAvatarError={() => {
+                console.error(
+                  '💥 Falha final no avatar.'
+                );
+
+                setModelError(true);
+              }}
+            />
+
+            <OrbitControls
+              ref={controlsRef}
+              makeDefault
+              enablePan={false}
+              minDistance={3.2}
+              maxDistance={8}
+              minPolarAngle={
+                Math.PI / 3.2
+              }
+              maxPolarAngle={
+                Math.PI / 1.7
+              }
+              target={[
+                0,
+                1.7,
+                0,
+              ]}
+            />
+          </Canvas>
+        </ErrorBoundary>
+      )}
+
+      {showControls &&
+        !modelError && (
+          <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full glass px-2 py-2">
+            <button
+              onClick={() =>
+                handleZoom(-1)
+              }
+              aria-label="Diminuir zoom"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-caiment-ink-soft hover:bg-white/70"
+            >
+              <ZoomOut
+                size={15}
+              />
+            </button>
+
+            <button
+              onClick={
+                handleReset
+              }
+              aria-label="Resetar câmera"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-caiment-ink-soft hover:bg-white/70"
+            >
+              <RotateCcw
+                size={15}
+              />
+            </button>
+
+            <button
+              onClick={() =>
+                handleZoom(1)
+              }
+              aria-label="Aumentar zoom"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-caiment-ink-soft hover:bg-white/70"
+            >
+              <ZoomIn
+                size={15}
+              />
+            </button>
+          </div>
+        )}
+    </div>
+  );
+}
+
+
+========== backend/src/features/clothing/index.ts ==========
+
+import { registerGarmentGenerator } from './geometry/createGarment';
+import { createTShirtGeometry } from './geometry/createTShirtGeometry';
+
+import './geometry/createShortGeometry';
+import './geometry/createDressGeometry';
+import './geometry/createPantsGeometry';
+
+registerGarmentGenerator('tshirt', (measurements) => createTShirtGeometry(measurements));
+
+export * from './geometry/types';
+export * from './geometry/createGarment';
+export * from './geometry/createTShirtGeometry';
+export * from './geometry/createShortGeometry';
+export * from './geometry/createDressGeometry';
+export * from './geometry/createPantsGeometry';
+export * from './geometry/assembleGarment';
+export * from './geometry/GarmentDeformation';
+export * from './geometry/MediaPipePoseAdapter';
+export * from './geometry/createDefaultGarmentFit';
+export * from './geometry/garmentMeasurementsAdapter';
+
+
+========== backend/src/features/clothing/geometry/assembleGarment.ts ==========
+
+import * as THREE from 'three';
+
+import type {
+  GarmentMeshData,
+  GarmentPanel,
+  GarmentSeam,
+  GarmentRegionDefinition,
+  GarmentFitDefinition,
+} from './types';
+
+import {
+  createFabricMaterial,
+  type FabricMaterialOptions,
+} from '../simulation/createFabricMaterial';
+
+export interface AssembleGarmentOptions {
+  material?: THREE.Material;
+  fabric?: FabricMaterialOptions;
+}
+
+export interface AssembledGarment {
+  group: THREE.Group;
+  geometry: THREE.BufferGeometry;
+  panels: GarmentPanel[];
+  seams: GarmentSeam[];
+  vertexCount: number;
+  triangleCount: number;
+}
+
+interface AssembledRegion {
+  id: string;
+  name: string;
+  bodyRegion: GarmentRegionDefinition['bodyRegion'];
+  role: GarmentRegionDefinition['role'];
+  vertexIndices: number[];
+}
+
+interface ResolvedSeam {
+  seam: GarmentSeam;
+  panelA: GarmentPanel;
+  panelB: GarmentPanel;
+  edgeA: number[];
+  edgeB: number[];
+  maximumInitialGap: number;
+  averageInitialGap: number;
+}
+
+interface WeldGroup {
+  root: string;
+  globalIndices: number[];
+}
+
+const EPSILON = 1e-7;
+
+/**
+ * VALIDAÇÃO DOS PAINÉIS
+ */
+
+function validatePanel(panel: GarmentPanel): void {
+  if (!panel || !panel.id?.trim()) {
+    throw new Error('CAIMENT: painel com ID inválido.');
+  }
+
+  if (
+    !panel.name?.trim() ||
+    !Array.isArray(panel.vertices) ||
+    !Array.isArray(panel.triangles) ||
+    panel.vertices.length === 0 ||
+    panel.triangles.length === 0
+  ) {
+    throw new Error(
+      `CAIMENT: painel "${panel.name || panel.id}" sem dados suficientes.`,
+    );
+  }
+
+  for (let i = 0; i < panel.vertices.length; i++) {
+    const vertex = panel.vertices[i];
+    const position = vertex?.position;
+
+    if (
+      !position ||
+      !Number.isFinite(position.x) ||
+      !Number.isFinite(position.y) ||
+      !Number.isFinite(position.z)
+    ) {
+      throw new Error(
+        `CAIMENT: posição inválida no vértice ${i} do painel "${panel.name}".`,
+      );
+    }
+
+    if (
+      vertex.mass !== undefined &&
+      (!Number.isFinite(vertex.mass) || vertex.mass <= 0)
+    ) {
+      throw new Error(
+        `CAIMENT: massa inválida no vértice ${i} do painel "${panel.name}".`,
+      );
+    }
+  }
+
+  for (let i = 0; i < panel.triangles.length; i++) {
+    const { a, b, c } = panel.triangles[i];
+
+    for (const index of [a, b, c]) {
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= panel.vertices.length
+      ) {
+        throw new Error(
+          `CAIMENT: índice inválido no triângulo ${i} do painel "${panel.name}".`,
+        );
+      }
+    }
+
+    if (a === b || b === c || c === a) {
+      throw new Error(
+        `CAIMENT: triângulo com índices repetidos no painel "${panel.name}".`,
+      );
+    }
+  }
+}
+
+/**
+ * VALIDAÇÃO DAS COSTURAS
+ */
+
+function validateSeam(
+  seam: GarmentSeam,
+  panelA: GarmentPanel,
+  panelB: GarmentPanel,
+): void {
+  if (
+    !seam.id?.trim() ||
+    !seam.name?.trim() ||
+    !Array.isArray(seam.edgeA) ||
+    !Array.isArray(seam.edgeB) ||
+    seam.edgeA.length < 2 ||
+    seam.edgeA.length !== seam.edgeB.length ||
+    !Number.isFinite(seam.stiffness) ||
+    seam.stiffness < 0 ||
+    seam.stiffness > 1
+  ) {
+    throw new Error(
+      `CAIMENT: configuração inválida na costura "${seam.name}".`,
+    );
+  }
+
+  if (panelA.id === panelB.id) {
+    throw new Error(
+      `CAIMENT: a costura "${seam.name}" não pode conectar o painel a ele mesmo.`,
+    );
+  }
+
+  if (
+    new Set(seam.edgeA).size !== seam.edgeA.length ||
+    new Set(seam.edgeB).size !== seam.edgeB.length
+  ) {
+    throw new Error(
+      `CAIMENT: a costura "${seam.name}" contém vértices repetidos na mesma borda.`,
+    );
+  }
+
+  for (const index of seam.edgeA) {
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= panelA.vertices.length
+    ) {
+      throw new Error(
+        `CAIMENT: índice inválido na costura "${seam.name}", painel A.`,
+      );
+    }
+  }
+
+  for (const index of seam.edgeB) {
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= panelB.vertices.length
+    ) {
+      throw new Error(
+        `CAIMENT: índice inválido na costura "${seam.name}", painel B.`,
+      );
+    }
+  }
+}
+
+/**
+ * CORRESPONDÊNCIA GEOMÉTRICA DAS COSTURAS
+ *
+ * Compara todos os pontos das bordas nas duas orientações.
+ * Não altera a ordem interna dos vértices, apenas decide
+ * se a segunda borda precisa ser invertida.
+ */
+
+function calculateEdgeDistance(
+  edgeA: number[],
+  edgeB: number[],
+  panelA: GarmentPanel,
+  panelB: GarmentPanel,
+): {
+  total: number;
+  maximum: number;
+  average: number;
+} {
+  let total = 0;
+  let maximum = 0;
+
+  for (let i = 0; i < edgeA.length; i++) {
+    const positionA = panelA.vertices[edgeA[i]].position;
+    const positionB = panelB.vertices[edgeB[i]].position;
+
+    const distance = positionA.distanceTo(positionB);
+
+    total += distance;
+    maximum = Math.max(maximum, distance);
+  }
+
+  return {
+    total,
+    maximum,
+    average: total / edgeA.length,
+  };
+}
+
+function resolveSeamCorrespondence(
+  seam: GarmentSeam,
+  panelA: GarmentPanel,
+  panelB: GarmentPanel,
+): ResolvedSeam {
+  const edgeA = [...seam.edgeA];
+  const directEdgeB = [...seam.edgeB];
+  const reversedEdgeB = [...seam.edgeB].reverse();
+
+  const direct = calculateEdgeDistance(
+    edgeA,
+    directEdgeB,
+    panelA,
+    panelB,
+  );
+
+  const reversed = calculateEdgeDistance(
+    edgeA,
+    reversedEdgeB,
+    panelA,
+    panelB,
+  );
+
+  const useReversed = reversed.total < direct.total;
+
+  const edgeB = useReversed ? reversedEdgeB : directEdgeB;
+  const correspondence = useReversed ? reversed : direct;
+
+  return {
+    seam,
+    panelA,
+    panelB,
+    edgeA,
+    edgeB,
+    maximumInitialGap: correspondence.maximum,
+    averageInitialGap: correspondence.average,
+  };
+}
+
+/**
+ * REGIÕES SEMÂNTICAS
+ */
+
+function assembleSemanticRegions(
+  fit: GarmentFitDefinition | undefined,
+  totalVertexCount: number,
+): AssembledRegion[] {
+  if (!fit?.regions?.length) {
+    return [];
+  }
+
+  const ids = new Set<string>();
+
+  return fit.regions.map((region) => {
+    if (!region.id?.trim() || ids.has(region.id)) {
+      throw new Error(
+        `CAIMENT: ID de região inválido ou duplicado: "${region.id}".`,
+      );
+    }
+
+    ids.add(region.id);
+
+    if (
+      !Array.isArray(region.vertexIndices) ||
+      region.vertexIndices.length === 0
+    ) {
+      throw new Error(
+        `CAIMENT: região "${region.name}" sem vértices.`,
+      );
+    }
+
+    const indices = new Set<number>();
+
+    for (const index of region.vertexIndices) {
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= totalVertexCount
+      ) {
+        throw new Error(
+          `CAIMENT: índice global inválido na região "${region.name}": ${index}.`,
+        );
+      }
+
+      indices.add(index);
+    }
+
+    return {
+      id: region.id,
+      name: region.name,
+      bodyRegion: region.bodyRegion,
+      role: region.role,
+      vertexIndices: [...indices],
+    };
+  });
+}
+
+/**
+ * DETECÇÃO DE TRIÂNGULOS DEGENERADOS
+ */
+
+function isDegenerateTriangle(
+  positions: number[],
+  a: number,
+  b: number,
+  c: number,
+): boolean {
+  const ax = positions[a * 3];
+  const ay = positions[a * 3 + 1];
+  const az = positions[a * 3 + 2];
+
+  const bx = positions[b * 3];
+  const by = positions[b * 3 + 1];
+  const bz = positions[b * 3 + 2];
+
+  const cx = positions[c * 3];
+  const cy = positions[c * 3 + 1];
+  const cz = positions[c * 3 + 2];
+
+  const abx = bx - ax;
+  const aby = by - ay;
+  const abz = bz - az;
+
+  const acx = cx - ax;
+  const acy = cy - ay;
+  const acz = cz - az;
+
+  const crossX = aby * acz - abz * acy;
+  const crossY = abz * acx - abx * acz;
+  const crossZ = abx * acy - aby * acx;
+
+  const areaSquared =
+    crossX * crossX +
+    crossY * crossY +
+    crossZ * crossZ;
+
+  return areaSquared <= EPSILON * EPSILON;
+}
+
+/**
+ * UNIÃO DOS VÉRTICES COSTURADOS
+ */
+
+function createDisjointSet() {
+  const parents = new Map<string, string>();
+
+  function find(key: string): string {
+    const parent = parents.get(key);
+
+    if (!parent) {
+      parents.set(key, key);
+      return key;
+    }
+
+    if (parent === key) {
+      return key;
+    }
+
+    const root = find(parent);
+    parents.set(key, root);
+
+    return root;
+  }
+
+  function connect(a: string, b: string): void {
+    const rootA = find(a);
+    const rootB = find(b);
+
+    if (rootA !== rootB) {
+      parents.set(rootB, rootA);
+    }
+  }
+
+  return {
+    parents,
+    find,
+    connect,
+  };
+}
+
+/**
+ * GRUPOS DE VÉRTICES COSTURADOS
+ */
+
+function createWeldGroups(
+  panels: GarmentPanel[],
+  panelOffsets: Map<string, number>,
+  find: (key: string) => string,
+  parents: Map<string, string>,
+): WeldGroup[] {
+  const groups = new Map<string, number[]>();
+
+  for (const panel of panels) {
+    const offset = panelOffsets.get(panel.id)!;
+
+    for (
+      let vertexIndex = 0;
+      vertexIndex < panel.vertices.length;
+      vertexIndex++
+    ) {
+      const key = `${panel.id}:${vertexIndex}`;
+
+      if (!parents.has(key)) {
+        continue;
+      }
+
+      const root = find(key);
+      const globalIndex = offset + vertexIndex;
+
+      const group = groups.get(root) ?? [];
+      group.push(globalIndex);
+      groups.set(root, group);
+    }
+  }
+
+  return [...groups.entries()]
+    .filter(([, indices]) => indices.length > 1)
+    .map(([root, globalIndices]) => ({
+      root,
+      globalIndices,
+    }));
+}
+
+/**
+ * POSIÇÃO DOS ENCONTROS DE COSTURA
+ *
+ * Em vez de criar uma nova posição pela média, escolhe
+ * o vértice existente mais próximo do centro geométrico
+ * do grupo.
+ *
+ * Assim, o ponto final continua pertencendo a um dos
+ * contornos originais dos painéis. Isso reduz a alteração
+ * da curvatura e evita criar posições artificiais em
+ * encontros de três ou mais painéis.
+ *
+ * Os índices originais são mantidos.
+ */
+
+function preserveWeldedPositions(
+  positions: number[],
+  groups: WeldGroup[],
+): void {
+  for (const group of groups) {
+    const center = new THREE.Vector3();
+
+    for (const globalIndex of group.globalIndices) {
+      center.x += positions[globalIndex * 3];
+      center.y += positions[globalIndex * 3 + 1];
+      center.z += positions[globalIndex * 3 + 2];
+    }
+
+    center.divideScalar(group.globalIndices.length);
+
+    let selectedIndex = group.globalIndices[0];
+    let minimumDistance = Infinity;
+
+    for (const globalIndex of group.globalIndices) {
+      const candidate = new THREE.Vector3(
+        positions[globalIndex * 3],
+        positions[globalIndex * 3 + 1],
+        positions[globalIndex * 3 + 2],
+      );
+
+      const distance = candidate.distanceToSquared(center);
+
+      if (distance < minimumDistance) {
+        minimumDistance = distance;
+        selectedIndex = globalIndex;
+      }
+    }
+
+    const x = positions[selectedIndex * 3];
+    const y = positions[selectedIndex * 3 + 1];
+    const z = positions[selectedIndex * 3 + 2];
+
+    for (const globalIndex of group.globalIndices) {
+      positions[globalIndex * 3] = x;
+      positions[globalIndex * 3 + 1] = y;
+      positions[globalIndex * 3 + 2] = z;
+    }
+  }
+}
+
+/**
+ * NORMAIS NAS COSTURAS
+ *
+ * Grupos com apenas dois vértices podem compartilhar
+ * normais para evitar uma linha artificial.
+ *
+ * Encontros com três ou mais vértices preservam as
+ * normais originais de cada painel, evitando apagar
+ * cantos e mudanças de direção.
+ */
+
+function smoothWeldedNormals(
+  geometry: THREE.BufferGeometry,
+  groups: WeldGroup[],
+): void {
+  const normalAttribute = geometry.getAttribute(
+    'normal',
+  ) as THREE.BufferAttribute | undefined;
+
+  if (!normalAttribute) {
+    return;
+  }
+
+  for (const group of groups) {
+    if (group.globalIndices.length !== 2) {
+      continue;
+    }
+
+    const average = new THREE.Vector3();
+
+    for (const globalIndex of group.globalIndices) {
+      average.x += normalAttribute.getX(globalIndex);
+      average.y += normalAttribute.getY(globalIndex);
+      average.z += normalAttribute.getZ(globalIndex);
+    }
+
+    if (average.lengthSq() <= EPSILON * EPSILON) {
+      continue;
+    }
+
+    average.normalize();
+
+    for (const globalIndex of group.globalIndices) {
+      normalAttribute.setXYZ(
+        globalIndex,
+        average.x,
+        average.y,
+        average.z,
+      );
+    }
+  }
+
+  normalAttribute.needsUpdate = true;
+}
+
+/**
+ * GEOMETRIA MONTADA
+ */
+
+function createAssembledGeometry(
+  meshData: GarmentMeshData,
+): THREE.BufferGeometry {
+  const panelMap = new Map<string, GarmentPanel>();
+  const panelOffsets = new Map<string, number>();
+
+  const positions: number[] = [];
+  const indices: number[] = [];
+
+  // 1. Validação e cópia dos painéis.
+
+  for (const panel of meshData.panels) {
+    if (panelMap.has(panel.id)) {
+      throw new Error(
+        `CAIMENT: ID de painel duplicado: "${panel.id}".`,
+      );
+    }
+
+    validatePanel(panel);
+
+    panelMap.set(panel.id, panel);
+    panelOffsets.set(panel.id, positions.length / 3);
+
+    for (const vertex of panel.vertices) {
+      positions.push(
+        vertex.position.x,
+        vertex.position.y,
+        vertex.position.z,
+      );
+    }
+  }
+
+  // 2. Correspondência das costuras.
+
+  const resolvedSeams: ResolvedSeam[] = [];
+  const seamIds = new Set<string>();
+
+  for (const seam of meshData.seams) {
+    if (seamIds.has(seam.id)) {
+      throw new Error(
+        `CAIMENT: ID de costura duplicado: "${seam.id}".`,
+      );
+    }
+
+    seamIds.add(seam.id);
+
+    const panelA = panelMap.get(seam.panelAId);
+    const panelB = panelMap.get(seam.panelBId);
+
+    if (!panelA || !panelB) {
+      throw new Error(
+        `CAIMENT: costura "${seam.name}" referencia painel inexistente.`,
+      );
+    }
+
+    validateSeam(seam, panelA, panelB);
+
+    resolvedSeams.push(
+      resolveSeamCorrespondence(seam, panelA, panelB),
+    );
+  }
+
+  // 3. União lógica dos vértices.
+
+  const disjointSet = createDisjointSet();
+
+  for (const resolved of resolvedSeams) {
+    const { panelA, panelB, edgeA, edgeB } = resolved;
+
+    for (let i = 0; i < edgeA.length; i++) {
+      disjointSet.connect(
+        `${panelA.id}:${edgeA[i]}`,
+        `${panelB.id}:${edgeB[i]}`,
+      );
+    }
+  }
+
+  // 4. Grupos completos de costura.
+
+  const weldGroups = createWeldGroups(
+    meshData.panels,
+    panelOffsets,
+    disjointSet.find,
+    disjointSet.parents,
+  );
+
+  // 5. Preservação dos contornos nos encontros.
+
+  preserveWeldedPositions(positions, weldGroups);
+
+  // 6. Triângulos.
+
+  for (const panel of meshData.panels) {
+    const offset = panelOffsets.get(panel.id)!;
+
+    for (let i = 0; i < panel.triangles.length; i++) {
+      const triangle = panel.triangles[i];
+
+      const a = offset + triangle.a;
+      const b = offset + triangle.b;
+      const c = offset + triangle.c;
+
+      if (isDegenerateTriangle(positions, a, b, c)) {
+        throw new Error(
+          `CAIMENT: triângulo degenerado no painel "${panel.name}", triângulo ${i}. Verifique a geometria e a correspondência das costuras.`,
+        );
+      }
+
+      indices.push(a, b, c);
+    }
+  }
+
+  if (indices.length === 0) {
+    throw new Error('CAIMENT: montagem sem triângulos.');
+  }
+
+  // 7. Regiões semânticas da peça.
+
+  const assembledRegions = assembleSemanticRegions(
+    meshData.fit,
+    positions.length / 3,
+  );
+
+  // 8. Geometria final.
+
+  const geometry = new THREE.BufferGeometry();
+
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+
+  geometry.setIndex(indices);
+
+  geometry.userData.panelOffsets = Object.fromEntries(panelOffsets);
+  geometry.userData.seams = meshData.seams;
+  geometry.userData.garmentFit = meshData.fit ?? null;
+  geometry.userData.assembledGarmentRegions = assembledRegions;
+  geometry.userData.coordinateSystem = meshData.coordinateSystem ?? null;
+
+  geometry.userData.seamDiagnostics = resolvedSeams.map((resolved) => ({
+    id: resolved.seam.id,
+    name: resolved.seam.name,
+    vertexCount: resolved.edgeA.length,
+    maximumInitialGap: resolved.maximumInitialGap,
+    averageInitialGap: resolved.averageInitialGap,
+  }));
+
+  // 9. Normais e limites.
+
+  geometry.computeVertexNormals();
+
+  smoothWeldedNormals(geometry, weldGroups);
+
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+
+  geometry.userData.weldedVertexGroupCount = weldGroups.length;
+
+  geometry.userData.weldedVertexCount = weldGroups.reduce(
+    (total, group) => total + group.globalIndices.length,
+    0,
+  );
+
+  return geometry;
+}
+
+/**
+ * MONTAGEM PRINCIPAL
+ */
+
+export function assembleGarment(
+  meshData: GarmentMeshData,
+  options: AssembleGarmentOptions = {},
+): AssembledGarment {
+  if (!meshData || !Array.isArray(meshData.panels) || meshData.panels.length === 0) {
+    throw new Error('CAIMENT: não é possível montar uma roupa sem painéis.');
+  }
+  if (!Array.isArray(meshData.seams)) {
+    throw new Error('CAIMENT: lista de costuras inválida.');
+  }
+
+  const geometry = createAssembledGeometry(meshData);
+  const material = options.material ?? createFabricMaterial({
+    color: options.fabric?.color ?? '#9254e1',
+    roughness: options.fabric?.roughness ?? 0.85,
+    metalness: options.fabric?.metalness ?? 0,
+    side: options.fabric?.side ?? THREE.DoubleSide,
+    opacity: options.fabric?.opacity ?? 1,
+    transparent: options.fabric?.transparent ?? false,
+    wireframe: options.fabric?.wireframe ?? false,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'AssembledGarmentMesh';
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  const group = new THREE.Group();
+  group.name = 'AssembledGarment';
+  group.add(mesh);
+  group.userData.meshData = meshData;
+  group.userData.isAssembled = true;
+  group.userData.garmentFit = meshData.fit ?? null;
+  group.userData.assembledGarmentRegions = geometry.userData.assembledGarmentRegions;
+  group.userData.seamDiagnostics = geometry.userData.seamDiagnostics;
+  group.userData.weldedVertexGroupCount = geometry.userData.weldedVertexGroupCount;
+  group.userData.weldedVertexCount = geometry.userData.weldedVertexCount;
+  group.updateMatrixWorld(true);
+
+  return {
+    group,
+    geometry,
+    panels: meshData.panels,
+    seams: meshData.seams,
+    vertexCount: geometry.getAttribute('position').count,
+    triangleCount: geometry.index ? geometry.index.count / 3 : 0,
+  };
+}
+
+
+========== backend/src/features/clothing/geometry/createGarment.ts ==========
+
+
+import * as THREE from 'three';
+
+import type {
+  GarmentParameters,
+  GarmentResult,
+  GarmentMeshData,
+  GarmentMeasurements,
+  GarmentType,
+} from './types';
+
+type GarmentGenerator = (
+  measurements: object,
+) => THREE.Group;
+
+interface GarmentGeneratorConfig {
+  generate: GarmentGenerator;
+}
+
+const garmentGenerators = new Map<
+  GarmentType,
+  GarmentGeneratorConfig
+>();
+
+/**
+ * Registra um gerador específico.
+ */
+export function registerGarmentGenerator<
+  TMeasurements extends object,
+>(
+  type: GarmentType,
+  generator: (measurements: TMeasurements) => THREE.Group,
+): void {
+  if (!type.trim()) {
+    throw new Error('O tipo da roupa precisa ser informado.');
+  }
+
+  if (garmentGenerators.has(type)) {
+    throw new Error(
+      `Já existe um gerador registrado para: ${type}.`,
+    );
+  }
+
+  garmentGenerators.set(type, {
+    generate: (measurements: object) =>
+      generator(measurements as TMeasurements),
+  });
+}
+
+/**
+ * Valida os parâmetros gerais.
+ */
+function validateGarmentParameters(
+  parameters: GarmentParameters<string, object>,
+): void {
+  if (!parameters.id.trim()) {
+    throw new Error('A roupa precisa possuir um ID.');
+  }
+
+  if (!parameters.name.trim()) {
+    throw new Error('A roupa precisa possuir um nome.');
+  }
+
+  if (!parameters.type.trim()) {
+    throw new Error('O tipo de roupa precisa ser informado.');
+  }
+
+  const measurements = Object.entries(
+    parameters.measurements,
+  );
+
+  if (measurements.length === 0) {
+    throw new Error('A roupa precisa possuir medidas.');
+  }
+
+  for (const [key, value] of measurements) {
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value <= 0
+    ) {
+      throw new Error(
+        `Medida inválida na roupa: ${key}.`,
+      );
+    }
+  }
+}
+
+/**
+ * Extrai os dados da malha.
+ */
+function getGarmentMeshData(
+  group: THREE.Group,
+): GarmentMeshData {
+  const meshData = group.userData.meshData as
+    | GarmentMeshData
+    | undefined;
+
+  if (!meshData) {
+    throw new Error(
+      'A geometria foi criada, mas os dados da malha não foram encontrados.',
+    );
+  }
+
+  if (
+    !Array.isArray(meshData.panels) ||
+    meshData.panels.length === 0
+  ) {
+    throw new Error(
+      'A roupa precisa possuir pelo menos um painel.',
+    );
+  }
+
+  if (
+    !Array.isArray(meshData.seams) ||
+    meshData.seams.length === 0
+  ) {
+    throw new Error(
+      'A roupa precisa possuir pelo menos uma costura.',
+    );
+  }
+
+  return meshData;
+}
+
+/**
+ * Cria uma roupa utilizando o gerador registrado.
+ */
+export function createGarment<
+  TType extends GarmentType,
+  TMeasurements extends object = GarmentMeasurements,
+>(
+  parameters: GarmentParameters<TType, TMeasurements>,
+): GarmentResult<TType, TMeasurements> {
+  validateGarmentParameters(parameters);
+
+  const registeredGenerator = garmentGenerators.get(
+    parameters.type,
+  );
+
+  if (!registeredGenerator) {
+    throw new Error(
+      `Tipo de roupa não suportado: ${parameters.type}.`,
+    );
+  }
+
+  const group = registeredGenerator.generate(
+    parameters.measurements,
+  );
+
+  if (!group?.isGroup) {
+    throw new Error(
+      'O gerador precisa retornar um grupo Three.js.',
+    );
+  }
+
+  const meshData = getGarmentMeshData(group);
+
+  group.name = parameters.name;
+
+  group.userData.garmentId = parameters.id;
+  group.userData.garmentName = parameters.name;
+  group.userData.garmentType = parameters.type;
+
+  return {
+    id: parameters.id,
+    name: parameters.name,
+    type: parameters.type,
+    group,
+    measurements: {
+      ...parameters.measurements,
+    },
+    meshData,
+  };
+}
+
+
+========== backend/src/features/clothing/geometry/createDefaultGarmentFit.ts ==========
+
+import * as THREE from 'three';
+
+import type {
+  BodyLandmark,
+  BodyRegion,
+  GarmentFitDefinition,
+  GarmentMeshData,
+  GarmentPanel,
+} from './types';
+
+function getPanelBounds(panels: GarmentPanel[]): THREE.Box3 {
+  const bounds = new THREE.Box3();
+  for (const panel of panels) {
+    for (const vertex of panel.vertices) bounds.expandByPoint(vertex.position);
+  }
+  if (bounds.isEmpty()) throw new Error('CAIMENT: não foi possível calcular os limites da roupa.');
+  return bounds;
+}
+
+function point(x: number, y: number, z: number): THREE.Vector3 {
+  return new THREE.Vector3(x, y, z);
+}
+
+function anchor(id: string, bodyLandmark: BodyLandmark, garmentPosition: THREE.Vector3) {
+  return { id, bodyLandmark, garmentPosition, weight: 1 };
+}
+
+/**
+ * Cria referências iniciais a partir da geometria da própria peça.
+ * Não consulta medidas corporais e não altera as dimensões fornecidas pela loja.
+ * Os pontos podem ser substituídos futuramente por referências extraídas
+ * automaticamente da imagem do produto.
+ */
+export function createDefaultGarmentFit(
+  type: string,
+  meshData: GarmentMeshData,
+): GarmentFitDefinition {
+  const torsoPanels = meshData.panels.filter((panel) =>
+    panel.type === 'front' || panel.type === 'back' ||
+    panel.type === 'skirtFront' || panel.type === 'skirtBack',
+  );
+  const bounds = getPanelBounds(torsoPanels.length ? torsoPanels : meshData.panels);
+  const { min, max } = bounds;
+  const width = Math.max(max.x - min.x, 0.001);
+  const height = Math.max(max.y - min.y, 0.001);
+  const centerX = (min.x + max.x) / 2;
+  const centerZ = (min.z + max.z) / 2;
+  const frontZ = max.z;
+  const yAt = (fraction: number) => min.y + height * fraction;
+  const xLeft = centerX - width * 0.5;
+  const xRight = centerX + width * 0.5;
+
+  let coverage: BodyRegion[];
+  let anchors: GarmentFitDefinition['anchors'];
+
+  if (type === 'tshirt') {
+    coverage = ['shoulders', 'chest', 'abdomen', 'leftArm', 'rightArm'];
+    anchors = [
+      anchor('garment-left-shoulder', 'leftShoulder', point(xLeft * 0.72 + centerX * 0.28, yAt(0.91), centerZ)),
+      anchor('garment-right-shoulder', 'rightShoulder', point(xRight * 0.72 + centerX * 0.28, yAt(0.91), centerZ)),
+      anchor('garment-bust', 'bustCenter', point(centerX, yAt(0.66), frontZ)),
+      anchor('garment-waist', 'waistCenter', point(centerX, yAt(0.40), frontZ)),
+    ];
+  } else if (type === 'dress') {
+    coverage = ['shoulders', 'chest', 'abdomen', 'waist', 'pelvis'];
+    anchors = [
+      anchor('garment-left-shoulder', 'leftShoulder', point(xLeft, yAt(0.94), centerZ)),
+      anchor('garment-right-shoulder', 'rightShoulder', point(xRight, yAt(0.94), centerZ)),
+      anchor('garment-bust', 'bustCenter', point(centerX, yAt(0.76), frontZ)),
+      anchor('garment-waist', 'waistCenter', point(centerX, yAt(0.57), frontZ)),
+      anchor('garment-hip', 'hipCenter', point(centerX, yAt(0.39), frontZ)),
+    ];
+  } else if (type === 'pants') {
+    coverage = ['pelvis', 'leftThigh', 'rightThigh', 'leftLeg', 'rightLeg'];
+    anchors = [
+      anchor('garment-waist', 'waistCenter', point(centerX, max.y, centerZ)),
+      anchor('garment-left-hip', 'leftHip', point(centerX - width * 0.25, yAt(0.83), frontZ)),
+      anchor('garment-right-hip', 'rightHip', point(centerX + width * 0.25, yAt(0.83), frontZ)),
+      anchor('garment-crotch', 'crotchCenter', point(centerX, yAt(0.68), centerZ)),
+      anchor('garment-left-knee', 'leftKnee', point(centerX - width * 0.22, yAt(0.39), centerZ)),
+      anchor('garment-right-knee', 'rightKnee', point(centerX + width * 0.22, yAt(0.39), centerZ)),
+      anchor('garment-left-ankle', 'leftAnkle', point(centerX - width * 0.22, min.y, centerZ)),
+      anchor('garment-right-ankle', 'rightAnkle', point(centerX + width * 0.22, min.y, centerZ)),
+    ];
+  } else if (type === 'short') {
+    coverage = ['pelvis', 'leftThigh', 'rightThigh'];
+    anchors = [
+      anchor('garment-waist', 'waistCenter', point(centerX, max.y, centerZ)),
+      anchor('garment-left-hip', 'leftHip', point(centerX - width * 0.25, yAt(0.82), frontZ)),
+      anchor('garment-right-hip', 'rightHip', point(centerX + width * 0.25, yAt(0.82), frontZ)),
+      anchor('garment-crotch', 'crotchCenter', point(centerX, yAt(0.55), centerZ)),
+    ];
+  } else {
+    coverage = [];
+    anchors = [anchor('garment-center', 'bodyCenter', point(centerX, (min.y + max.y) / 2, centerZ))];
+  }
+
+  return { coverage, anchors, clearance: 0.02 };
+}
+
+export default createDefaultGarmentFit;
+
+
+========== backend/src/features/clothing/geometry/garmentMeasurementsAdapter.ts ==========
+
+
+import {
+  DEFAULT_TSHIRT_MEASUREMENTS,
+  type GarmentMeasurements,
+} from './types';
+
+/**
+ * ============================================================
+ * TIPOS DO CATÁLOGO FITSENSE
+ * ============================================================
+ */
+
+type MeasurementType = 'circumference' | 'linear' | 'length';
+
+interface CatalogMeasurement {
+  value: number;
+  unit: 'cm';
+  type: MeasurementType;
+  landmark?: string;
+}
+
+interface CatalogSize {
+  size: string;
+  measurements: Record<string, CatalogMeasurement>;
+}
+
+export interface StoreCatalogProduct {
+  id: string;
+  name: string;
+  model?: {
+    geometryProfile?: string;
+  };
+  sizes: CatalogSize[];
+}
+
+/**
+ * ============================================================
+ * TIPOS DAS GEOMETRIAS
+ * ============================================================
+ */
+
+export interface ShortGeometryMeasurements {
+  waist: number;
+  hip: number;
+  length: number;
+  crotchDepth: number;
+  legOpening: number;
+  depth: number;
+  rise: number;
+}
+
+export interface DressGeometryMeasurements {
+  bust: number;
+  waist: number;
+  hip: number;
+  length: number;
+  shoulderWidth: number;
+  depth: number;
+}
+
+export interface PantsGeometryMeasurements {
+  waist: number;
+  hip: number;
+  length: number;
+  crotchDepth: number;
+  legOpening: number;
+  depth: number;
+  rise: number;
+}
+
+export type AdaptedGarment =
+  | {
+      type: 'tshirt';
+      productId: string;
+      productName: string;
+      size: string;
+      measurements: GarmentMeasurements;
+    }
+  | {
+      type: 'short';
+      productId: string;
+      productName: string;
+      size: string;
+      measurements: ShortGeometryMeasurements;
+    }
+  | {
+      type: 'dress';
+      productId: string;
+      productName: string;
+      size: string;
+      measurements: DressGeometryMeasurements;
+    }
+  | {
+      type: 'pants';
+      productId: string;
+      productName: string;
+      size: string;
+      measurements: PantsGeometryMeasurements;
+    };
+
+/**
+ * ============================================================
+ * CONFIGURAÇÕES GEOMÉTRICAS
+ * ============================================================
+ *
+ * Valores que não existem no catálogo e são necessários
+ * apenas para construir a geometria.
+ *
+ * Não representam medidas comerciais fornecidas pela loja.
+ */
+
+const GEOMETRY_DEFAULTS = {
+  tshirtDepth: DEFAULT_TSHIRT_MEASUREMENTS.depth,
+  tshirtNeckDepth: DEFAULT_TSHIRT_MEASUREMENTS.neckDepth,
+
+  dressDepth: 0.18,
+
+  shortDepth: 0.18,
+  pantsDepth: 0.20,
+
+  // Pequena margem positiva exigida pelo gerador.
+  minimumRise: 0.001,
+};
+
+/**
+ * ============================================================
+ * CONVERSÕES E VALIDAÇÕES
+ * ============================================================
+ */
+
+function centimetersToMeters(value: number): number {
+  return value / 100;
+}
+
+function getMeasurement(
+  measurements: Record<string, CatalogMeasurement>,
+  field: string,
+  expectedType: MeasurementType,
+): number {
+  const measurement = measurements[field];
+
+  if (!measurement) {
+    throw new Error(
+      `O catálogo não fornece a medida obrigatória "${field}".`,
+    );
+  }
+
+  if (
+    !Number.isFinite(measurement.value) ||
+    measurement.value <= 0
+  ) {
+    throw new Error(
+      `A medida "${field}" possui um valor inválido.`,
+    );
+  }
+
+  if (measurement.unit !== 'cm') {
+    throw new Error(
+      `A medida "${field}" precisa estar em centímetros.`,
+    );
+  }
+
+  if (measurement.type !== expectedType) {
+    throw new Error(
+      `A medida "${field}" deveria ser do tipo "${expectedType}", mas recebeu "${measurement.type}".`,
+    );
+  }
+
+  return centimetersToMeters(measurement.value);
+}
+
+function getCircumference(
+  measurements: Record<string, CatalogMeasurement>,
+  field: string,
+): number {
+  return getMeasurement(measurements, field, 'circumference');
+}
+
+function getLinear(
+  measurements: Record<string, CatalogMeasurement>,
+  field: string,
+): number {
+  return getMeasurement(measurements, field, 'linear');
+}
+
+function getLength(
+  measurements: Record<string, CatalogMeasurement>,
+  field: string,
+): number {
+  return getMeasurement(measurements, field, 'length');
+}
+
+/**
+ * ============================================================
+ * CONVERSÃO DA CAMISETA
+ * ============================================================
+ */
+
+function adaptTShirt(
+  measurements: Record<string, CatalogMeasurement>,
+): GarmentMeasurements {
+  const chestCircumference = getCircumference(
+    measurements,
+    'chestCircumference',
+  );
+
+  const shoulderWidth = getLinear(
+    measurements,
+    'shoulderWidth',
+  );
+
+  const bodyLength = getLength(
+    measurements,
+    'bodyLength',
+  );
+
+  const sleeveLength = getLength(
+    measurements,
+    'sleeveLength',
+  );
+
+  const sleeveOpeningCircumference = getCircumference(
+    measurements,
+    'sleeveOpeningCircumference',
+  );
+
+  const neckOpeningWidth = getLinear(
+    measurements,
+    'neckOpeningWidth',
+  );
+
+  return {
+    // Circunferência convertida para largura plana.
+    width: chestCircumference / 2,
+
+    height: bodyLength,
+
+    // Profundidade geométrica: não existe no catálogo.
+    depth: GEOMETRY_DEFAULTS.tshirtDepth,
+
+    shoulderWidth,
+
+    sleeveLength,
+
+    // Abertura circular convertida para largura plana.
+    sleeveWidth: sleeveOpeningCircumference / 2,
+
+    neckWidth: neckOpeningWidth,
+
+    // Profundidade geométrica: não existe no catálogo.
+    neckDepth: GEOMETRY_DEFAULTS.tshirtNeckDepth,
+  };
+}
+
+/**
+ * ============================================================
+ * CONVERSÃO DO VESTIDO
+ * ============================================================
+ */
+
+function adaptDress(
+  measurements: Record<string, CatalogMeasurement>,
+): DressGeometryMeasurements {
+  return {
+    // O gerador divide as circunferências por 2.
+    bust: getCircumference(
+      measurements,
+      'bustCircumference',
+    ),
+
+    waist: getCircumference(
+      measurements,
+      'waistCircumference',
+    ),
+
+    hip: getCircumference(
+      measurements,
+      'hipCircumference',
+    ),
+
+    length: getLength(
+      measurements,
+      'dressLength',
+    ),
+
+    shoulderWidth: getLinear(
+      measurements,
+      'shoulderWidth',
+    ),
+
+    // Profundidade geométrica: não existe no catálogo.
+    depth: GEOMETRY_DEFAULTS.dressDepth,
+  };
+}
+
+/**
+ * ============================================================
+ * CONVERSÃO DE SHORT E CALÇA
+ * ============================================================
+ *
+ * Os dois geradores utilizam:
+ *
+ * - waist: circunferência da cintura;
+ * - hip: circunferência do quadril;
+ * - length: comprimento usado na construção vertical;
+ * - crotchDepth: profundidade da região do gancho;
+ * - legOpening: circunferência da abertura inferior;
+ * - rise: extensão superior da peça.
+ *
+ * A geometria utiliza:
+ *
+ * comprimento interno = length - crotchDepth
+ * comprimento externo = length + rise
+ *
+ * Assim, podemos calcular os parâmetros a partir dos
+ * comprimentos interno e externo do catálogo.
+ */
+
+function calculateLowerBodyLengths(
+  measurements: Record<string, CatalogMeasurement>,
+): {
+  length: number;
+  crotchDepth: number;
+  rise: number;
+} {
+  const inseamLength = getLength(
+    measurements,
+    'inseamLength',
+  );
+
+  const outseamLength = getLength(
+    measurements,
+    'outseamLength',
+  );
+
+  const frontRise = getLength(
+    measurements,
+    'frontRise',
+  );
+
+  const totalDifference = outseamLength - inseamLength;
+
+  if (totalDifference <= GEOMETRY_DEFAULTS.minimumRise) {
+    throw new Error(
+      'O comprimento externo precisa ser maior que o comprimento interno.',
+    );
+  }
+
+  /**
+   * O frontRise é usado como referência para a profundidade
+   * do gancho. Como os valores do catálogo podem apresentar
+   * pequenas diferenças entre as medidas, limitamos esse
+   * valor à diferença real entre os comprimentos.
+   */
+  const crotchDepth = Math.min(
+    frontRise,
+    totalDifference - GEOMETRY_DEFAULTS.minimumRise,
+  );
+
+  const rise = totalDifference - crotchDepth;
+
+  const length = inseamLength + crotchDepth;
+
+  return {
+    length,
+    crotchDepth,
+    rise,
+  };
+}
+
+/**
+ * ============================================================
+ * CONVERSÃO DO SHORT
+ * ============================================================
+ */
+
+function adaptShort(
+  measurements: Record<string, CatalogMeasurement>,
+): ShortGeometryMeasurements {
+  const lengths = calculateLowerBodyLengths(measurements);
+
+  return {
+    waist: getCircumference(
+      measurements,
+      'waistCircumference',
+    ),
+
+    hip: getCircumference(
+      measurements,
+      'hipCircumference',
+    ),
+
+    ...lengths,
+
+    /**
+     * O catálogo não fornece a circunferência da abertura
+     * inferior do short.
+     *
+     * Usamos a circunferência da coxa como aproximação
+     * provisória para a abertura da perna.
+     */
+    legOpening: getCircumference(
+      measurements,
+      'thighCircumference',
+    ),
+
+    depth: GEOMETRY_DEFAULTS.shortDepth,
+  };
+}
+
+/**
+ * ============================================================
+ * CONVERSÃO DA CALÇA
+ * ============================================================
+ */
+
+function adaptPants(
+  measurements: Record<string, CatalogMeasurement>,
+): PantsGeometryMeasurements {
+  const lengths = calculateLowerBodyLengths(measurements);
+
+  return {
+    waist: getCircumference(
+      measurements,
+      'waistCircumference',
+    ),
+
+    hip: getCircumference(
+      measurements,
+      'hipCircumference',
+    ),
+
+    ...lengths,
+
+    legOpening: getCircumference(
+      measurements,
+      'hemCircumference',
+    ),
+
+    depth: GEOMETRY_DEFAULTS.pantsDepth,
+  };
+}
+
+/**
+ * ============================================================
+ * ADAPTADOR PRINCIPAL
+ * ============================================================
+ *
+ * Recebe o produto do catálogo FitSense e o tamanho escolhido.
+ * Identifica a geometria pelo geometryProfile do produto.
+ *
+ * Retorna o tipo da roupa e as medidas convertidas para metros.
+ */
+
+export function adaptStoreProductMeasurements(
+  product: StoreCatalogProduct,
+  selectedSize: string,
+): AdaptedGarment {
+  if (!product || !product.id || !product.name) {
+    throw new Error(
+      'Os dados do produto FitSense são inválidos.',
+    );
+  }
+
+  const selectedSizeData = product.sizes?.find(
+    (item) => item.size === selectedSize,
+  );
+
+  if (!selectedSizeData) {
+    throw new Error(
+      `O tamanho "${selectedSize}" não foi encontrado no produto "${product.name}".`,
+    );
+  }
+
+  const measurements = selectedSizeData.measurements;
+
+  if (!measurements) {
+    throw new Error(
+      `O produto "${product.name}" não possui medidas cadastradas para o tamanho ${selectedSize}.`,
+    );
+  }
+
+  const profile = product.model?.geometryProfile;
+
+  const base = {
+    productId: product.id,
+    productName: product.name,
+    size: selectedSize,
+  };
+
+  switch (profile) {
+    case 'tshirt-basic':
+      return {
+        ...base,
+        type: 'tshirt',
+        measurements: adaptTShirt(measurements),
+      };
+
+    case 'shorts-basic':
+      return {
+        ...base,
+        type: 'short',
+        measurements: adaptShort(measurements),
+      };
+
+    case 'dress-a-line':
+      return {
+        ...base,
+        type: 'dress',
+        measurements: adaptDress(measurements),
+      };
+
+    case 'pants-wide-leg':
+      return {
+        ...base,
+        type: 'pants',
+        measurements: adaptPants(measurements),
+      };
+
+    default:
+      throw new Error(
+        `Perfil de geometria não reconhecido: "${profile ?? 'não informado'}".`,
+      );
+  }
+}
+
+
+========== backend/src/features/clothing/geometry/types.ts ==========
+
+import * as THREE from 'three';
+
+/**
+ * ============================================================
+ * SISTEMA UNIVERSAL DE COORDENADAS CAIMENT
+ * ============================================================
+ *
+ * Unidade: metros.
+ *
+ * X: largura (direita/esquerda).
+ * Y: altura (pés até cabeça).
+ * Z: profundidade (costas/frente).
+ *
+ * Origem: centro do chão, entre os pés.
+ *
+ * Frente do corpo: +Z.
+ * Costas do corpo: -Z.
+ */
+
+export const CAIMENT_COORDINATE_SYSTEM = {
+  unit: 'meters',
+  up: '+Y',
+  right: '+X',
+  forward: '+Z',
+  origin: 'body_floor_center',
+} as const;
+
+export type CoordinateSystem = typeof CAIMENT_COORDINATE_SYSTEM;
+
+/**
+ * ============================================================
+ * REFERÊNCIAS ANATÔMICAS UNIVERSAIS
+ * ============================================================
+ */
+
+export type BodyLandmark =
+  | 'bodyCenter'
+  | 'neckBase'
+  | 'shoulderCenter'
+  | 'leftShoulder'
+  | 'rightShoulder'
+  | 'bustCenter'
+  | 'waistCenter'
+  | 'hipCenter'
+  | 'leftHip'
+  | 'rightHip'
+  | 'crotchCenter'
+  | 'leftKnee'
+  | 'rightKnee'
+  | 'leftAnkle'
+  | 'rightAnkle'
+  | 'leftElbow'
+  | 'rightElbow'
+  | 'leftWrist'
+  | 'rightWrist';
+
+export type BodyLandmarks = Record<
+  BodyLandmark,
+  THREE.Vector3
+>;
+
+/**
+ * ============================================================
+ * REGIÕES ANATÔMICAS UNIVERSAIS
+ * ============================================================
+ *
+ * Essas regiões pertencem ao manequim, não aos geradores.
+ */
+
+export type BodyRegion =
+  | 'neck'
+  | 'shoulders'
+  | 'chest'
+  | 'abdomen'
+  | 'waist'
+  | 'pelvis'
+  | 'leftArm'
+  | 'rightArm'
+  | 'leftForearm'
+  | 'rightForearm'
+  | 'leftHand'
+  | 'rightHand'
+  | 'leftThigh'
+  | 'rightThigh'
+  | 'leftLeg'
+  | 'rightLeg'
+  | 'leftFoot'
+  | 'rightFoot';
+
+/**
+ * ============================================================
+ * TIPOS DE ROUPAS
+ * ============================================================
+ *
+ * Identificam os geradores disponíveis.
+ * O motor universal não depende desses tipos.
+ */
+
+export type GarmentType =
+  | 'tshirt'
+  | 'short'
+  | 'dress'
+  | 'pants';
+
+/**
+ * ============================================================
+ * TIPOS DE PAINÉIS
+ * ============================================================
+ */
+
+export type GarmentPanelType =
+  | 'front'
+  | 'back'
+  | 'leftSleeve'
+  | 'rightSleeve'
+  | 'collar'
+  | 'waistband'
+  | 'leftLeg'
+  | 'rightLeg'
+  | 'skirtFront'
+  | 'skirtBack';
+
+/**
+ * ============================================================
+ * REGIÕES SEMÂNTICAS DA ROUPA
+ * ============================================================
+ *
+ * Cada região identifica um conjunto de vértices da geometria.
+ * Os índices devem corresponder à geometria montada da roupa.
+ */
+
+export type GarmentRegionRole =
+  | 'coverage'
+  | 'opening'
+  | 'support'
+  | 'hem'
+  | 'articulation'
+  | 'contact';
+
+export interface GarmentRegionDefinition {
+  /** Identificador único dentro da peça. */
+  id: string;
+
+  /** Nome descritivo da região. */
+  name: string;
+
+  /** Região anatômica correspondente no manequim. */
+  bodyRegion: BodyRegion;
+
+  /**
+   * Índices dos vértices que compõem esta região.
+   * Devem ser índices globais da geometria montada.
+   */
+  vertexIndices: number[];
+
+  /** Função geométrica da região. */
+  role: GarmentRegionRole;
+}
+
+/**
+ * ============================================================
+ * PONTOS DE CORRESPONDÊNCIA
+ * ============================================================
+ *
+ * Relacionam um ponto da roupa com um landmark corporal.
+ */
+
+export interface GarmentAnchor {
+  id: string;
+
+  bodyLandmark: BodyLandmark;
+
+  /** Posição correspondente na geometria original da roupa. */
+  garmentPosition: THREE.Vector3;
+
+  /** Peso da influência do ponto no alinhamento. */
+  weight?: number;
+}
+
+/**
+ * ============================================================
+ * SUSTENTAÇÃO ANATÔMICA
+ * ============================================================
+ *
+ * Uma região da roupa pode receber apoio de uma região
+ * anatômica do manequim.
+ */
+
+export type GarmentSupportMode =
+  | 'contact'
+  | 'wrap'
+  | 'hang';
+
+export interface GarmentSupportDefinition {
+  /** Identificador único da regra de sustentação. */
+  id: string;
+
+  /** Região da roupa que recebe sustentação. */
+  garmentRegionId: string;
+
+  /** Região anatômica que oferece o apoio. */
+  bodyRegion: BodyRegion;
+
+  /**
+   * Forma física de sustentação:
+   *
+   * contact: apoio por contato com o corpo.
+   * wrap: sustentação por envolvimento/ajuste.
+   * hang: sustentação transmitida por outra região apoiada.
+   */
+  mode: GarmentSupportMode;
+
+  /** Intensidade da influência da sustentação (0 a 1). */
+  strength: number;
+}
+
+/**
+ * ============================================================
+ * CONTRATO UNIVERSAL DE ENCAIXE
+ * ============================================================
+ */
+
+export interface GarmentFitDefinition {
+  /** Regiões anatômicas que a peça deve cobrir. */
+  coverage: BodyRegion[];
+
+  /** Correspondências entre pontos da roupa e do corpo. */
+  anchors: GarmentAnchor[];
+
+  /** Folga desejada entre roupa e corpo, em metros. */
+  clearance: number;
+
+  /** Fator opcional de ajuste de escala. */
+  scale?: THREE.Vector3;
+
+  /** Regiões semânticas identificadas na geometria. */
+  regions?: GarmentRegionDefinition[];
+
+  /** Regras de sustentação anatômica. */
+  supports?: GarmentSupportDefinition[];
+}
+
+/**
+ * ============================================================
+ * MEDIDAS DAS PEÇAS
+ * ============================================================
+ *
+ * Todas as medidas físicas são em metros.
+ * Mantidas para compatibilidade com os geradores existentes.
+ */
+
+export interface TShirtMeasurements {
+  width: number;
+  height: number;
+  depth: number;
+  shoulderWidth: number;
+  sleeveLength: number;
+  sleeveWidth: number;
+  neckWidth: number;
+  neckDepth: number;
+}
+
+export type GarmentMeasurements = TShirtMeasurements;
+
+export interface PantsMeasurements {
+  waistWidth: number;
+  hipWidth: number;
+  length: number;
+  thighWidth: number;
+  legOpening: number;
+  depth: number;
+}
+
+export interface ShortMeasurements extends PantsMeasurements {
+  length: number;
+}
+
+export interface DressMeasurements {
+  bustWidth: number;
+  waistWidth: number;
+  hipWidth: number;
+  shoulderWidth: number;
+  length: number;
+  depth: number;
+}
+
+/**
+ * ============================================================
+ * PARÂMETROS GERAIS DA ROUPA
+ * ============================================================
+ */
+
+export interface GarmentParameters<
+  TType extends string = GarmentType,
+  TMeasurements extends object = Record<string, number>,
+> {
+  id: string;
+  name: string;
+  type: TType;
+  measurements: TMeasurements;
+
+  /** Metadados opcionais de encaixe universal. */
+  fit?: GarmentFitDefinition;
+}
+
+/**
+ * ============================================================
+ * VÉRTICES
+ * ============================================================
+ */
+
+export interface GarmentVertex {
+  id: number;
+  position: THREE.Vector3;
+  initialPosition: THREE.Vector3;
+  mass: number;
+
+  /**
+   * Compatibilidade com geradores antigos.
+   * Não deve ser utilizado como mecanismo universal
+   * de sustentação da roupa.
+   *
+   * A sustentação é declarada em fit.supports.
+   */
+  pinned: boolean;
+}
+
+/**
+ * ============================================================
+ * TRIÂNGULOS
+ * ============================================================
+ */
+
+export interface GarmentTriangle {
+  a: number;
+  b: number;
+  c: number;
+}
+
+/**
+ * ============================================================
+ * PAINÉIS
+ * ============================================================
+ */
+
+export interface GarmentPanel<
+  TPanelType extends string = GarmentPanelType,
+> {
+  id: string;
+  type: TPanelType;
+  name: string;
+  vertices: GarmentVertex[];
+  triangles: GarmentTriangle[];
+  geometry: THREE.BufferGeometry;
+}
+
+/**
+ * ============================================================
+ * COSTURAS
+ * ============================================================
+ */
+
+export interface GarmentSeam {
+  id: string;
+  name: string;
+  panelAId: string;
+  panelBId: string;
+  edgeA: number[];
+  edgeB: number[];
+  stiffness: number;
+}
+
+/**
+ * ============================================================
+ * DADOS UNIVERSAIS DA MALHA
+ * ============================================================
+ */
+
+export interface GarmentMeshData<
+  TPanelType extends string = GarmentPanelType,
+> {
+  panels: GarmentPanel<TPanelType>[];
+  seams: GarmentSeam[];
+  vertexCount: number;
+  triangleCount: number;
+
+  /** Sistema de coordenadas utilizado pela geometria. */
+  coordinateSystem?: CoordinateSystem;
+
+  /** Informações universais de encaixe da peça. */
+  fit?: GarmentFitDefinition;
+}
+
+/**
+ * ============================================================
+ * RESULTADO DA GERAÇÃO
+ * ============================================================
+ */
+
+export interface GarmentResult<
+  TType extends string = GarmentType,
+  TMeasurements extends object = Record<string, number>,
+  TPanelType extends string = GarmentPanelType,
+> {
+  id: string;
+  name: string;
+  type: TType;
+  group: THREE.Group;
+  measurements: TMeasurements;
+  meshData: GarmentMeshData<TPanelType>;
+}
+
+/**
+ * ============================================================
+ * MATERIAL
+ * ============================================================
+ */
+
+export interface FabricParameters {
+  color: THREE.ColorRepresentation;
+  roughness: number;
+  metalness: number;
+  side?: THREE.Side;
+}
+
+/**
+ * ============================================================
+ * SIMULAÇÃO
+ * ============================================================
+ */
+
+export interface ClothSimulationParameters {
+  gravity: number;
+  stiffness: number;
+  damping: number;
+  mass: number;
+}
+
+/**
+ * ============================================================
+ * CONFIGURAÇÕES PADRÃO LEGADAS
+ * ============================================================
+ */
+
+export const DEFAULT_TSHIRT_MEASUREMENTS: GarmentMeasurements = {
+  width: 0.499,
+  height: 0.699,
+  depth: 0.297,
+  shoulderWidth: 0.38,
+  sleeveLength: 0.0695,
+  sleeveWidth: 0.12,
+  neckWidth: 0.14,
+  neckDepth: 0.055,
+};
+
+
+========== backend/src/features/clothing/geometry/GarmentDeformation.ts ==========
+
+import * as THREE from 'three';
+import type { BodyLandmark, BodyLandmarks, GarmentFitDefinition } from './types';
+
+export interface GarmentDeformationOptions {
+  strength?: number;
+  influenceRadius?: number;
+  /** Projeta somente os pontos de controle para fora do corpo; nunca cada vértice. */
+  bodyCollision?: { resolve(position: THREE.Vector3): THREE.Vector3 | null };
+}
+
+export interface GarmentDeformationResult {
+  geometry: THREE.BufferGeometry;
+  deformedVertexCount: number;
+  maximumDisplacement: number;
+  averageDisplacement: number;
+}
+
+const EPSILON = 1e-8;
+
+function outwardDirection(landmark: BodyLandmark, landmarks: BodyLandmarks): THREE.Vector3 {
+  switch (landmark) {
+    case 'leftShoulder': case 'leftHip': case 'leftElbow': case 'leftWrist': case 'leftKnee': case 'leftAnkle':
+      return new THREE.Vector3(-1, 0, 0);
+    case 'rightShoulder': case 'rightHip': case 'rightElbow': case 'rightWrist': case 'rightKnee': case 'rightAnkle':
+      return new THREE.Vector3(1, 0, 0);
+    case 'neckBase': return new THREE.Vector3(0, 1, 0);
+    case 'bustCenter': case 'waistCenter': case 'hipCenter': case 'crotchCenter':
+      return new THREE.Vector3(0, 0, 1);
+    default: {
+      const p = landmarks[landmark];
+      const direction = p.clone().sub(landmarks.bodyCenter);
+      return direction.lengthSq() > EPSILON ? direction.normalize() : new THREE.Vector3(0, 0, 1);
+    }
+  }
+}
+
+function validateInput(geometry: THREE.BufferGeometry, fit: GarmentFitDefinition, landmarks: BodyLandmarks): void {
+  const position = geometry.getAttribute('position');
+  if (!position || position.count === 0) throw new Error('CAIMENT: geometria sem vértices para deformação.');
+  if (!fit.anchors?.length) throw new Error('CAIMENT: a peça não possui pontos de referência para deformação.');
+  if (!landmarks?.bodyCenter) throw new Error('CAIMENT: pontos anatômicos do corpo não foram fornecidos.');
+  for (const a of fit.anchors) {
+    if (!a.garmentPosition || !landmarks[a.bodyLandmark]) {
+      throw new Error(`CAIMENT: referência incompleta no ponto "${a.id}".`);
+    }
+    if (![a.garmentPosition.x, a.garmentPosition.y, a.garmentPosition.z].every(Number.isFinite)) {
+      throw new Error(`CAIMENT: posição inválida no ponto "${a.id}" da roupa.`);
+    }
+  }
+}
+
+/**
+ * Deforma a malha já criada pela loja. A geometria original é clonada;
+ * os vértices recebem um campo de deslocamento suave calculado a partir
+ * das correspondências entre referências da peça e landmarks do avatar.
+ * Não reconstrói painéis, não recalcula medidas de roupa e não simula tecido.
+ */
+export function applyGarmentDeformation(
+  sourceGeometry: THREE.BufferGeometry,
+  fit: GarmentFitDefinition,
+  landmarks: BodyLandmarks,
+  options: GarmentDeformationOptions = {},
+): GarmentDeformationResult {
+  validateInput(sourceGeometry, fit, landmarks);
+
+  const strength = THREE.MathUtils.clamp(options.strength ?? 1, 0, 1);
+  const geometry = sourceGeometry.clone();
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const bounds = new THREE.Box3().setFromBufferAttribute(position);
+  const diagonal = Math.max(bounds.getSize(new THREE.Vector3()).length(), 0.05);
+  const radius = Math.max(options.influenceRadius ?? diagonal * 0.34, 0.025);
+  const sigmaSquared = radius * radius;
+
+  const controls = fit.anchors.map((anchor) => {
+    const bodyPoint = landmarks[anchor.bodyLandmark];
+    const outward = outwardDirection(anchor.bodyLandmark, landmarks);
+    const target = bodyPoint.clone().addScaledVector(outward, fit.clearance ?? 0);
+    const collisionProjection = options.bodyCollision?.resolve(target.clone());
+    if (collisionProjection) target.copy(collisionProjection);
+    const displacement = target.sub(anchor.garmentPosition);
+    return {
+      source: anchor.garmentPosition.clone(),
+      displacement,
+      weight: Math.max(anchor.weight ?? 1, 0),
+    };
+  }).filter((control) => control.weight > 0);
+
+  if (!controls.length) throw new Error('CAIMENT: todos os pontos de deformação possuem peso zero.');
+
+  // A translação média posiciona a peça. Os resíduos locais adaptam regiões
+  // específicas sem redimensionar globalmente a geometria por medidas corporais.
+  const globalDisplacement = new THREE.Vector3();
+  let totalControlWeight = 0;
+  for (const control of controls) {
+    globalDisplacement.addScaledVector(control.displacement, control.weight);
+    totalControlWeight += control.weight;
+  }
+  globalDisplacement.divideScalar(Math.max(totalControlWeight, EPSILON));
+
+  const original = new THREE.Vector3();
+  const delta = new THREE.Vector3();
+  const residual = new THREE.Vector3();
+  let maximumDisplacement = 0;
+  let totalDisplacement = 0;
+  let deformedVertexCount = 0;
+
+  for (let i = 0; i < position.count; i++) {
+    original.fromBufferAttribute(position, i);
+    let weightedResidual = 0;
+    residual.set(0, 0, 0);
+
+    for (const control of controls) {
+      const distanceSquared = original.distanceToSquared(control.source);
+      const influence = Math.exp(-distanceSquared / (2 * sigmaSquared)) * control.weight;
+      if (influence <= 1e-7) continue;
+      delta.copy(control.displacement).sub(globalDisplacement);
+      residual.addScaledVector(delta, influence);
+      weightedResidual += influence;
+    }
+
+    if (weightedResidual > EPSILON) residual.divideScalar(weightedResidual);
+    else residual.set(0, 0, 0);
+
+    delta.copy(globalDisplacement).add(residual).multiplyScalar(strength);
+    const displacementLength = delta.length();
+    if (displacementLength > EPSILON) deformedVertexCount++;
+    maximumDisplacement = Math.max(maximumDisplacement, displacementLength);
+    totalDisplacement += displacementLength;
+    position.setXYZ(i, original.x + delta.x, original.y + delta.y, original.z + delta.z);
+  }
+
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  geometry.userData.garmentDeformationApplied = true;
+  geometry.userData.garmentDeformation = {
+    controlPointCount: controls.length,
+    strength,
+    influenceRadius: radius,
+  };
+
+  return {
+    geometry,
+    deformedVertexCount,
+    maximumDisplacement,
+    averageDisplacement: totalDisplacement / Math.max(position.count, 1),
+  };
+}
+
+export default applyGarmentDeformation;
+
+
+========== backend/src/features/clothing/geometry/MediaPipePoseAdapter.ts ==========
+
+import * as THREE from 'three';
+import type { BodyLandmarks } from './types';
+
+export interface MediaPipeWorldLandmark {
+  x: number;
+  y: number;
+  z: number;
+  visibility?: number;
+}
+
+export interface MediaPipePoseResultLike {
+  worldLandmarks?: MediaPipeWorldLandmark[][];
+}
+
+export interface MediaPipePoseAdapterOptions {
+  /** Altura em metros do avatar que receberá os pontos. */
+  avatarHeight: number;
+  /** MediaPipe world landmarks usam Y para cima e Z positivo para trás. */
+  invertDepth?: boolean;
+  /** Ignora pontos abaixo deste nível de confiança. Padrão: 0.35. */
+  minimumVisibility?: number;
+}
+
+const INDEX = {
+  nose: 0,
+  leftShoulder: 11, rightShoulder: 12,
+  leftElbow: 13, rightElbow: 14,
+  leftWrist: 15, rightWrist: 16,
+  leftHip: 23, rightHip: 24,
+  leftKnee: 25, rightKnee: 26,
+  leftAnkle: 27, rightAnkle: 28,
+} as const;
+
+/**
+ * Converte os worldLandmarks do MediaPipe Pose Landmarker para o sistema
+ * CAIMENT (X largura, Y altura, +Z frente). O avatarHeight ancora a escala.
+ * A função não estima circunferências nem medidas de roupa.
+ */
+export function createBodyLandmarksFromMediaPipe(
+  result: MediaPipePoseResultLike,
+  options: MediaPipePoseAdapterOptions,
+): BodyLandmarks {
+  const pose = result.worldLandmarks?.[0];
+  if (!pose || pose.length <= INDEX.rightAnkle) {
+    throw new Error('CAIMENT: o MediaPipe não retornou os worldLandmarks necessários.');
+  }
+  if (!Number.isFinite(options.avatarHeight) || options.avatarHeight <= 0) {
+    throw new Error('CAIMENT: avatarHeight precisa ser maior que zero.');
+  }
+
+  const required = Object.values(INDEX);
+  for (const index of required) {
+    const p = pose[index];
+    if (!p || ![p.x, p.y, p.z].every(Number.isFinite)) {
+      throw new Error(`CAIMENT: landmark ${index} ausente ou inválido no resultado do MediaPipe.`);
+    }
+    if ((p.visibility ?? 1) < (options.minimumVisibility ?? 0.35)) {
+      throw new Error(`CAIMENT: landmark ${index} está com baixa confiança. Refaça a captura em posição frontal e bem iluminada.`);
+    }
+  }
+
+  const ankleY = Math.min(pose[INDEX.leftAnkle].y, pose[INDEX.rightAnkle].y);
+  const topY = Math.max(pose[INDEX.nose].y, pose[INDEX.leftShoulder].y, pose[INDEX.rightShoulder].y);
+  const sourceHeight = Math.max(topY - ankleY, 0.1);
+  const scale = options.avatarHeight / sourceHeight;
+  const hipOriginX = (pose[INDEX.leftHip].x + pose[INDEX.rightHip].x) / 2;
+  const hipOriginZ = (pose[INDEX.leftHip].z + pose[INDEX.rightHip].z) / 2;
+
+  const convert = (index: number) => {
+    const p = pose[index];
+    return new THREE.Vector3(
+      (p.x - hipOriginX) * scale,
+      (p.y - ankleY) * scale,
+      ((options.invertDepth ?? true) ? -1 : 1) * (p.z - hipOriginZ) * scale,
+    );
+  };
+
+  const leftShoulder = convert(INDEX.leftShoulder);
+  const rightShoulder = convert(INDEX.rightShoulder);
+  const leftHip = convert(INDEX.leftHip);
+  const rightHip = convert(INDEX.rightHip);
+  const leftKnee = convert(INDEX.leftKnee);
+  const rightKnee = convert(INDEX.rightKnee);
+  const leftAnkle = convert(INDEX.leftAnkle);
+  const rightAnkle = convert(INDEX.rightAnkle);
+  const shoulderCenter = leftShoulder.clone().add(rightShoulder).multiplyScalar(0.5);
+  const hipCenter = leftHip.clone().add(rightHip).multiplyScalar(0.5);
+  const leftElbow = convert(INDEX.leftElbow);
+  const rightElbow = convert(INDEX.rightElbow);
+  const leftWrist = convert(INDEX.leftWrist);
+  const rightWrist = convert(INDEX.rightWrist);
+
+  return {
+    bodyCenter: shoulderCenter.clone().lerp(hipCenter, 0.5),
+    neckBase: shoulderCenter.clone().add(new THREE.Vector3(0, options.avatarHeight * 0.045, 0)),
+    shoulderCenter,
+    leftShoulder, rightShoulder,
+    bustCenter: shoulderCenter.clone().lerp(hipCenter, 0.30),
+    waistCenter: shoulderCenter.clone().lerp(hipCenter, 0.66),
+    hipCenter, leftHip, rightHip,
+    crotchCenter: hipCenter.clone().lerp(leftKnee.clone().add(rightKnee).multiplyScalar(0.5), 0.24),
+    leftKnee, rightKnee, leftAnkle, rightAnkle,
+    leftElbow, rightElbow, leftWrist, rightWrist,
+  };
+}
+
+export default createBodyLandmarksFromMediaPipe;
+
+
+========== backend/src/features/clothing/visualization/GarmentVisualizer.tsx ==========
+
+
+import { useMemo, useState } from 'react';
+import * as THREE from 'three';
+
+import { Canvas } from '@react-three/fiber';
+import { Line, OrbitControls } from '@react-three/drei';
+
+import type {
+  GarmentPanel,
+  GarmentResult,
+  GarmentSeam,
+  GarmentPanelType,
+} from '../geometry/types';
+
+type DisplayMode = 'original' | 'exploded';
+
+interface GarmentVisualizerProps {
+  garment: GarmentResult<
+    any,
+    any,
+    GarmentPanelType
+  >;
+}
+
+interface PanelOffset {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Cores específicas dos painéis da camiseta.
+ * Outros tipos de painéis recebem cores automaticamente.
+ */
+const PANEL_COLORS: Record<string, string> = {
+  front: '#9254e1',
+  back: '#7040b0',
+  leftSleeve: '#b3ff79',
+  rightSleeve: '#83c94f',
+  collar: '#e5a5ff',
+};
+
+/**
+ * Paleta de cores para painéis de outros tipos de roupa.
+ */
+const GENERIC_PANEL_COLORS = [
+  '#9254e1',
+  '#b3ff79',
+  '#e5a5ff',
+  '#ffbd59',
+  '#55c8c8',
+  '#e87979',
+  '#8ca8ff',
+  '#c49a6c',
+];
+
+const SEAM_COLOR = '#ffbd59';
+
+/**
+ * Retorna a cor do painel.
+ * Se o tipo não estiver cadastrado, utiliza a paleta genérica.
+ */
+function getPanelColor(
+  panelType: string,
+  panelIndex: number,
+): string {
+  return (
+    PANEL_COLORS[panelType] ??
+    GENERIC_PANEL_COLORS[
+      panelIndex % GENERIC_PANEL_COLORS.length
+    ]
+  );
+}
+
+/**
+ * Calcula a posição dos painéis na visualização.
+ *
+ * Os deslocamentos da camiseta são preservados.
+ * Outros tipos recebem uma distribuição radial automática.
+ */
+function getPanelOffset(
+  panelType: string,
+  mode: DisplayMode,
+  panelIndex: number,
+  totalPanels: number,
+): PanelOffset {
+  if (mode === 'original') {
+    return { x: 0, y: 0, z: 0 };
+  }
+
+  switch (panelType) {
+    case 'front':
+      return { x: 0, y: 0, z: 0.16 };
+
+    case 'back':
+      return { x: 0, y: 0, z: -0.16 };
+
+    case 'leftSleeve':
+      return { x: -0.24, y: 0, z: 0 };
+
+    case 'rightSleeve':
+      return { x: 0.24, y: 0, z: 0 };
+
+    case 'collar':
+      return { x: 0, y: 0.2, z: 0 };
+
+    default: {
+      const angle =
+        (2 * Math.PI * panelIndex) /
+        Math.max(totalPanels, 1);
+
+      const radius = 0.22;
+
+      return {
+        x: Math.cos(angle) * radius,
+        y: panelIndex % 2 === 0 ? 0.06 : -0.06,
+        z: Math.sin(angle) * radius,
+      };
+    }
+  }
+}
+
+/**
+ * Recupera as posições dos vértices de uma costura.
+ */
+function getSeamPoints(
+  panel: GarmentPanel,
+  indices: number[],
+): THREE.Vector3[] {
+  return indices
+    .map((index) => panel.vertices[index]?.position)
+    .filter(
+      (position): position is THREE.Vector3 =>
+        position instanceof THREE.Vector3,
+    );
+}
+
+/**
+ * Visualização individual de um painel.
+ */
+function PanelView({
+  panel,
+  mode,
+  seams,
+  panelIndex,
+  totalPanels,
+}: {
+  panel: GarmentPanel;
+  mode: DisplayMode;
+  seams: GarmentSeam[];
+  panelIndex: number;
+  totalPanels: number;
+}) {
+  const offset = getPanelOffset(
+    panel.type,
+    mode,
+    panelIndex,
+    totalPanels,
+  );
+
+  const panelColor = getPanelColor(
+    panel.type,
+    panelIndex,
+  );
+
+  const panelSeams = useMemo(() => {
+    return seams
+      .map((seam) => {
+        if (seam.panelAId === panel.id) {
+          return {
+            id: seam.id,
+            indices: seam.edgeA,
+          };
+        }
+
+        if (seam.panelBId === panel.id) {
+          return {
+            id: seam.id,
+            indices: seam.edgeB,
+          };
+        }
+
+        return null;
+      })
+      .filter(
+        (
+          item,
+        ): item is { id: string; indices: number[] } =>
+          item !== null,
+      );
+  }, [panel, seams]);
+
+  const seamLines = useMemo(() => {
+    return panelSeams.map((seam) => ({
+      id: seam.id,
+      points: getSeamPoints(panel, seam.indices),
+    }));
+  }, [panel, panelSeams]);
+
+  return (
+    <group position={[offset.x, offset.y, offset.z]}>
+      <mesh geometry={panel.geometry}>
+        <meshStandardMaterial
+          color={panelColor}
+          roughness={0.85}
+          metalness={0}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+
+      {seamLines.map((seam) => (
+        seam.points.length >= 2 && (
+          <Line
+            key={seam.id}
+            points={seam.points}
+            color={SEAM_COLOR}
+            lineWidth={2.5}
+          />
+        )
+      ))}
+    </group>
+  );
+}
+
+/**
+ * Cena 3D genérica da roupa.
+ *
+ * Aceita qualquer estrutura de medidas, sem limitar
+ * o visualizador a um tipo específico de vestuário.
+ */
+function GarmentScene({
+  garment,
+  mode,
+}: {
+  garment: GarmentVisualizerProps['garment'];
+  mode: DisplayMode;
+}) {
+  const panels = garment.meshData.panels;
+  const seams = garment.meshData.seams;
+
+  return (
+    <>
+      <ambientLight intensity={1.5} />
+
+      <directionalLight
+        position={[3, 5, 5]}
+        intensity={2}
+      />
+
+      <directionalLight
+        position={[-3, 2, -4]}
+        intensity={1}
+      />
+
+      {panels.map((panel, index) => (
+        <PanelView
+          key={panel.id}
+          panel={panel}
+          mode={mode}
+          seams={seams}
+          panelIndex={index}
+          totalPanels={panels.length}
+        />
+      ))}
+
+      <OrbitControls
+        makeDefault
+        target={[0, 0.15, 0]}
+        enableDamping
+        dampingFactor={0.08}
+        minDistance={0.7}
+        maxDistance={5}
+      />
+
+      <gridHelper
+        args={[2, 20, '#777777', '#333333']}
+        position={[0, -0.4, 0]}
+      />
+    </>
+  );
+}
+
+/**
+ * Visualizador principal genérico.
+ */
+export default function GarmentVisualizer({
+  garment,
+}: GarmentVisualizerProps) {
+  const [mode, setMode] = useState<DisplayMode>('original');
+
+  if (!garment?.meshData?.panels?.length) {
+    return (
+      <div>
+        Não foi possível encontrar os painéis da roupa.
+      </div>
+    );
+  }
+
+  return (
+    <section
+      style={{
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+      }}
+    >
+      <header>
+        <h2>{garment.name}</h2>
+
+        <p>
+          {garment.meshData.panels.length} painéis ·{' '}
+          {garment.meshData.seams.length} costuras ·{' '}
+          {garment.meshData.vertexCount} vértices
+        </p>
+      </header>
+
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '8px',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setMode('original')}
+          disabled={mode === 'original'}
+        >
+          Posição original
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMode('exploded')}
+          disabled={mode === 'exploded'}
+        >
+          Separar painéis
+        </button>
+      </div>
+
+      <div
+        style={{
+          width: '100%',
+          height: '520px',
+          overflow: 'hidden',
+          borderRadius: '12px',
+          background: '#1c1b1e',
+        }}
+      >
+        <Canvas
+          camera={{
+            position: [2.2, 1.2, 3.2],
+            fov: 45,
+            near: 0.01,
+            far: 100,
+          }}
+        >
+          <color
+            attach="background"
+            args={['#1c1b1e']}
+          />
+
+          <GarmentScene
+            garment={garment}
+            mode={mode}
+          />
+        </Canvas>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '14px',
+          fontSize: '13px',
+        }}
+      >
+        {garment.meshData.panels.map((panel, index) => (
+          <span
+            key={panel.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+            }}
+          >
+            <span
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '3px',
+                background: getPanelColor(
+                  panel.type,
+                  index,
+                ),
+              }}
+            />
+
+            {panel.name}
+          </span>
+        ))}
+
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+          }}
+        >
+          <span
+            style={{
+              width: '18px',
+              height: '3px',
+              background: SEAM_COLOR,
+            }}
+          />
+          Costuras
+        </span>
+      </div>
+
+      <p style={{ fontSize: '12px', opacity: 0.7 }}>
+        Arraste para girar a câmera e utilize a roda do mouse
+        para aproximar ou afastar.
+      </p>
+    </section>
+  );
+}
+
+
+========== backend/src/pages/AvatarCreation/AvatarCreationPage.tsx ==========
+
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Sparkles, Info } from 'lucide-react';
+
+import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { PhotoUpload } from '@/components/upload/PhotoUpload';
+import { Button } from '@/components/ui/Button';
+import { CaimentBubble } from '@/components/caiment/CaimentBubble';
+import { useToast } from '@/components/ui/Toast';
+
+import type {
+  AvatarPhoto,
+  PhotoAngle,
+} from '@/types';
+
+import { getCaimentMessage } from '@/data/mock/mockCaiment';
+import {
+  generateAvatar,
+  isLovableCloudConfigured,
+} from '@/services/api';
+
+import { useAuth } from '@/context/AuthContext';
+import { createAvatarRecord } from '@/services/firebase/avatar';
+
+const angles: {
+  angle: PhotoAngle;
+  label: string;
+}[] = [
+  {
+    angle: 'front',
+    label: 'Frontal',
+  },
+  {
+    angle: 'back',
+    label: 'Traseira',
+  },
+  {
+    angle: 'left',
+    label: 'Lateral esquerda',
+  },
+  {
+    angle: 'right',
+    label: 'Lateral direita',
+  },
+];
+
+export default function AvatarCreationPage() {
+  const navigate = useNavigate();
+
+  const { show } = useToast();
+
+  const { user } = useAuth();
+
+  const [photos, setPhotos] =
+    useState<
+      Record<
+        PhotoAngle,
+        AvatarPhoto
+      >
+    >(() =>
+      Object.fromEntries(
+        angles.map(
+          ({ angle }) => [
+            angle,
+            {
+              id: angle,
+              angle,
+              previewUrl: null,
+              file: null,
+            },
+          ],
+        ),
+      ) as Record<
+        PhotoAngle,
+        AvatarPhoto
+      >,
+    );
+
+  const [isSending, setIsSending] =
+    useState(false);
+
+  const allFilled =
+    angles.every(
+      ({ angle }) =>
+        Boolean(
+          photos[angle]
+            .previewUrl,
+        ),
+    );
+
+  const handleChange = (
+    angle: PhotoAngle,
+    file: File,
+  ) => {
+    const url =
+      URL.createObjectURL(file);
+
+    setPhotos((prev) => ({
+      ...prev,
+
+      [angle]: {
+        ...prev[angle],
+        previewUrl: url,
+        file,
+      },
+    }));
+  };
+
+  const handleRemove = (
+    angle: PhotoAngle,
+  ) => {
+    setPhotos((prev) => ({
+      ...prev,
+
+      [angle]: {
+        ...prev[angle],
+        previewUrl: null,
+        file: null,
+      },
+    }));
+  };
+
+  const handleGenerate =
+    async () => {
+      if (!user) {
+        show(
+          'Você precisa estar conectado para criar seu avatar.',
+          'warning',
+        );
+
+        navigate('/login');
+
+        return;
+      }
+
+      if (!allFilled) {
+        show(
+          'Envie as quatro fotos para continuar.',
+          'warning',
+        );
+
+        return;
+      }
+
+      if (isSending) {
+        return;
+      }
+
+      try {
+        setIsSending(true);
+
+        const formData =
+          new FormData();
+
+        const front =
+          photos.front.file;
+
+        const left =
+          photos.left.file;
+
+        const back =
+          photos.back.file;
+
+        const right =
+          photos.right.file;
+
+        if (
+          !front ||
+          !left ||
+          !back ||
+          !right
+        ) {
+          show(
+            'As quatro fotos são obrigatórias.',
+            'warning',
+          );
+
+          return;
+        }
+
+        formData.append(
+          'front',
+          front,
+        );
+
+        formData.append(
+          'left',
+          left,
+        );
+
+        formData.append(
+          'back',
+          back,
+        );
+
+        formData.append(
+          'right',
+          right,
+        );
+
+        show(
+          isLovableCloudConfigured
+            ? 'Enviando fotos para o backend seguro do CAIMENT...'
+            : 'Enviando fotos para o CAIMENT...',
+          'success',
+        );
+
+        const data =
+          await generateAvatar(
+            formData,
+          );
+
+        console.log(
+          '🎯 Task ID:',
+          data.taskId,
+        );
+
+        /*
+         * SALVA A TAREFA NO PERFIL
+         * DO USUÁRIO
+         */
+        await createAvatarRecord(
+          user.uid,
+          data.taskId,
+        );
+
+        /*
+         * Mantemos temporariamente
+         * apenas o taskId para a tela
+         * de processamento.
+         */
+        sessionStorage.setItem(
+          'caiment_avatar_task_id',
+          data.taskId,
+        );
+
+        navigate(
+          '/avatar-criacao/processando',
+        );
+      } catch (error) {
+        console.error(
+          '❌ Erro:',
+          error,
+        );
+
+        show(
+          error instanceof Error
+            ? error.message
+            : 'Erro ao criar o avatar.',
+          'warning',
+        );
+      } finally {
+        setIsSending(false);
+      }
+    };
+
+  return (
+    <DashboardLayout title="Criar meu avatar">
+
+      <div className="mx-auto max-w-3xl space-y-6">
+
+        <CaimentBubble
+          message={getCaimentMessage(
+            'avatar-creation',
+          )}
+        />
+
+        <div className="flex items-start gap-2.5 rounded-2xl border border-caiment-purple-100 bg-caiment-purple-50/60 p-4 text-sm text-caiment-ink-soft">
+
+          <Info
+            size={16}
+            className="mt-0.5 shrink-0 text-caiment-purple-400"
+          />
+
+          <span>
+            Utilize fotos de corpo inteiro,
+            com boa iluminação e sem cortes.
+          </span>
+
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+
+          {angles.map(
+            ({
+              angle,
+              label,
+            }) => (
+              <PhotoUpload
+                key={angle}
+                photo={
+                  photos[angle]
+                }
+                label={label}
+                onChange={
+                  handleChange
+                }
+                onRemove={
+                  handleRemove
+                }
+              />
+            ),
+          )}
+
+        </div>
+
+        <Button
+          fullWidth
+          size="lg"
+          icon={
+            <Sparkles
+              size={17}
+            />
+          }
+          onClick={
+            handleGenerate
+          }
+          disabled={
+            !allFilled ||
+            isSending
+          }
+        >
+          {isSending
+            ? 'Enviando fotos...'
+            : 'Gerar meu avatar'}
+        </Button>
+
+      </div>
+
+    </DashboardLayout>
+  );
+}
+
+
+========== backend/src/services/firebase/avatar.ts ==========
+
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+
+import { db } from './config';
+
+export type AvatarStatus =
+  | 'none'
+  | 'processing'
+  | 'ready'
+  | 'error';
+
+export interface UserAvatar {
+  status: AvatarStatus;
+  taskId?: string | null;
+  modelUrl?: string | null;
+  previewUrl?: string | null;
+  source?: 'tripo' | 'manual';
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+function avatarRef(uid: string) {
+  return doc(
+    db,
+    'users',
+    uid,
+    'avatar',
+    'current'
+  );
+}
+
+export async function createAvatarRecord(
+  uid: string,
+  taskId?: string
+) {
+  await setDoc(avatarRef(uid), {
+    status: 'processing',
+    taskId: taskId ?? null,
+    modelUrl: null,
+    previewUrl: null,
+    source: 'tripo',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateAvatarRecord(
+  uid: string,
+  data: Partial<UserAvatar>
+) {
+  await updateDoc(avatarRef(uid), {
+    ...data,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function getAvatar(uid: string) {
+  const snapshot = await getDoc(
+    avatarRef(uid)
+  );
+
+  if (!snapshot.exists()) {
+    return null;
+  }
+
+  return snapshot.data() as UserAvatar;
+}

@@ -1,0 +1,332 @@
+
+{
+  "catalogVersion": "1.2.1",
+  "notice": "CATÁLOGO FICTÍCIO PARA DEMONSTRAÇÃO. Todas as medidas são valores ilustrativos de referência e não representam produtos comerciais reais.",
+  "measurementUnit": "cm",
+  "products": [
+    {
+      "id": "1",
+      "sku": "FS-CAM-001",
+      "name": "Regata Essential",
+      "category": "upper",
+      "categoryLabel": "Regatas",
+      "price": 129.9,
+      "description": "Regata de modelagem regular, decote redondo e tecido de algodão para uso cotidiano.",
+      "images": {
+        "front": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1200&q=90",
+        "back": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1200&q=90"
+      },
+      "colors": [
+        { "name": "Branco", "hex": "#F5F5F2" },
+        { "name": "Preto", "hex": "#171717" }
+      ],
+      "material": {
+        "composition": "100% algodão (referência fictícia)",
+        "elasticity": "low",
+        "elasticityLabel": "Baixa"
+      },
+      "model": {
+        "fit": "regular",
+        "sleeves": false,
+        "neckline": "round",
+        "geometryProfile": "tshirt-basic",
+        "garmentModel": "tank-top"
+      },
+      "measurementConvention": "Medidas fictícias da peça pronta. width representa a largura plana total da peça na linha do tórax. height representa o comprimento vertical do ombro até a barra. depth representa a profundidade geométrica total entre frente e costas. shoulderWidth representa a largura linear entre as extremidades dos ombros. neckWidth representa a largura da abertura do decote. chestCircumference, waistCircumference e hemCircumference representam as circunferências completas da peça nas respectivas linhas. armholeDepth representa a distância vertical entre a extremidade superior do ombro e a linha inferior da cava. strapWidth representa a largura linear de cada alça. frontNeckDepth e backNeckDepth representam as profundidades verticais dos decotes frontal e traseiro, medidas a partir da linha superior dos ombros. Todas as medidas são fornecidas em centímetros e convertidas para metros pelo adaptador do CAIMENT.",
+      "sizes": [
+        {
+          "size": "P",
+          "measurements": {
+            "width": { "value": 48, "unit": "cm", "type": "linear", "landmark": "largura plana na linha do tórax" },
+            "height": { "value": 66, "unit": "cm", "type": "length", "landmark": "ombro até a barra" },
+            "depth": { "value": 18, "unit": "cm", "type": "length", "landmark": "profundidade geométrica total entre frente e costas" },
+            "shoulderWidth": { "value": 42, "unit": "cm", "type": "linear", "landmark": "extremidade a extremidade dos ombros" },
+            "neckWidth": { "value": 17, "unit": "cm", "type": "linear", "landmark": "largura da abertura do decote" },
+            "chestCircumference": { "value": 96, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha do tórax" },
+            "waistCircumference": { "value": 92, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da cintura" },
+            "hemCircumference": { "value": 96, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da barra" },
+            "armholeDepth": { "value": 21, "unit": "cm", "type": "length", "landmark": "extremidade superior do ombro até a linha inferior da cava" },
+            "strapWidth": { "value": 6, "unit": "cm", "type": "linear", "landmark": "largura de cada alça" },
+            "frontNeckDepth": { "value": 9, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote frontal" },
+            "backNeckDepth": { "value": 3, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote traseiro" }
+          }
+        },
+        {
+          "size": "M",
+          "measurements": {
+            "width": { "value": 51, "unit": "cm", "type": "linear", "landmark": "largura plana na linha do tórax" },
+            "height": { "value": 69, "unit": "cm", "type": "length", "landmark": "ombro até a barra" },
+            "depth": { "value": 19, "unit": "cm", "type": "length", "landmark": "profundidade geométrica total entre frente e costas" },
+            "shoulderWidth": { "value": 44, "unit": "cm", "type": "linear", "landmark": "extremidade a extremidade dos ombros" },
+            "neckWidth": { "value": 18, "unit": "cm", "type": "linear", "landmark": "largura da abertura do decote" },
+            "chestCircumference": { "value": 102, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha do tórax" },
+            "waistCircumference": { "value": 98, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da cintura" },
+            "hemCircumference": { "value": 102, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da barra" },
+            "armholeDepth": { "value": 22, "unit": "cm", "type": "length", "landmark": "extremidade superior do ombro até a linha inferior da cava" },
+            "strapWidth": { "value": 6.5, "unit": "cm", "type": "linear", "landmark": "largura de cada alça" },
+            "frontNeckDepth": { "value": 9.5, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote frontal" },
+            "backNeckDepth": { "value": 3.5, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote traseiro" }
+          }
+        },
+        {
+          "size": "G",
+          "measurements": {
+            "width": { "value": 54, "unit": "cm", "type": "linear", "landmark": "largura plana na linha do tórax" },
+            "height": { "value": 72, "unit": "cm", "type": "length", "landmark": "ombro até a barra" },
+            "depth": { "value": 20, "unit": "cm", "type": "length", "landmark": "profundidade geométrica total entre frente e costas" },
+            "shoulderWidth": { "value": 46, "unit": "cm", "type": "linear", "landmark": "extremidade a extremidade dos ombros" },
+            "neckWidth": { "value": 19, "unit": "cm", "type": "linear", "landmark": "largura da abertura do decote" },
+            "chestCircumference": { "value": 108, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha do tórax" },
+            "waistCircumference": { "value": 104, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da cintura" },
+            "hemCircumference": { "value": 108, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da barra" },
+            "armholeDepth": { "value": 23, "unit": "cm", "type": "length", "landmark": "extremidade superior do ombro até a linha inferior da cava" },
+            "strapWidth": { "value": 7, "unit": "cm", "type": "linear", "landmark": "largura de cada alça" },
+            "frontNeckDepth": { "value": 10, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote frontal" },
+            "backNeckDepth": { "value": 4, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote traseiro" }
+          }
+        }
+      ],
+      "slug": "fitsense-regata-essential"
+    },
+    {
+      "id": "2",
+      "sku": "FS-CAL-001",
+      "name": "Calça Wide Leg",
+      "category": "lower",
+      "categoryLabel": "Calças",
+      "price": 249.9,
+      "description": "Calça de cintura média e pernas amplas, com caimento reto e confortável.",
+      "images": {
+        "front": "https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=1200&q=90",
+        "back": "https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=1200&q=90"
+      },
+      "colors": [
+        { "name": "Azul jeans", "hex": "#263B5A" }
+      ],
+      "material": {
+        "composition": "98% algodão, 2% elastano (referência fictícia)",
+        "elasticity": "low",
+        "elasticityLabel": "Baixa"
+      },
+      "model": {
+        "fit": "wide-leg",
+        "waist": "mid-rise",
+        "geometryProfile": "pants-wide-leg"
+      },
+      "measurementConvention": "Medidas fictícias da peça pronta. waistWidth, hipWidth, thighWidth e legOpening representam circunferências completas, não larguras planas. length representa o comprimento interno da perna, do gancho à barra. outseamLength representa o comprimento externo, do cós à barra. crotchDepth representa a profundidade geométrica do gancho. crotchWidth representa a distância entre os centros das pernas. rise representa a altura do gancho até o cós. frontRise representa a altura frontal do cós até o encontro do gancho. depth representa a profundidade geométrica entre frente e costas. kneeCircumference representa a circunferência completa na linha do joelho. Todas as medidas são fornecidas em centímetros e convertidas para metros pelo adaptador do CAIMENT.",
+      "sizes": [
+        {
+          "size": "P",
+          "measurements": {
+            "waistWidth": { "value": 76, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do cós" },
+            "hipWidth": { "value": 98, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do quadril" },
+            "thighWidth": { "value": 58, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da coxa, próximo ao gancho" },
+            "legOpening": { "value": 52, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da abertura de cada perna" },
+            "length": { "value": 76, "unit": "cm", "type": "length", "landmark": "gancho até a barra pela parte interna" },
+            "depth": { "value": 26, "unit": "cm", "type": "length", "landmark": "profundidade geométrica entre frente e costas" },
+            "crotchDepth": { "value": 24, "unit": "cm", "type": "length", "landmark": "profundidade geométrica da região do gancho" },
+            "crotchWidth": { "value": 12, "unit": "cm", "type": "linear", "landmark": "distância entre os centros das pernas" },
+            "rise": { "value": 27, "unit": "cm", "type": "length", "landmark": "altura entre a região do gancho e o cós" },
+            "kneeCircumference": { "value": 48, "unit": "cm", "type": "circumference", "landmark": "linha do joelho" },
+            "hemCircumference": { "value": 52, "unit": "cm", "type": "circumference", "landmark": "abertura da barra de cada perna" },
+            "frontRise": { "value": 27, "unit": "cm", "type": "length", "landmark": "cós frontal até encontro do gancho" },
+            "outseamLength": { "value": 105, "unit": "cm", "type": "length", "landmark": "cós lateral até barra" }
+          }
+        },
+        {
+          "size": "M",
+          "measurements": {
+            "waistWidth": { "value": 82, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do cós" },
+            "hipWidth": { "value": 104, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do quadril" },
+            "thighWidth": { "value": 62, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da coxa, próximo ao gancho" },
+            "legOpening": { "value": 56, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da abertura de cada perna" },
+            "length": { "value": 77, "unit": "cm", "type": "length", "landmark": "gancho até a barra pela parte interna" },
+            "depth": { "value": 27, "unit": "cm", "type": "length", "landmark": "profundidade geométrica entre frente e costas" },
+            "crotchDepth": { "value": 25, "unit": "cm", "type": "length", "landmark": "profundidade geométrica da região do gancho" },
+            "crotchWidth": { "value": 13, "unit": "cm", "type": "linear", "landmark": "distância entre os centros das pernas" },
+            "rise": { "value": 28, "unit": "cm", "type": "length", "landmark": "altura entre a região do gancho e o cós" },
+            "kneeCircumference": { "value": 52, "unit": "cm", "type": "circumference", "landmark": "linha do joelho" },
+            "hemCircumference": { "value": 56, "unit": "cm", "type": "circumference", "landmark": "abertura da barra de cada perna" },
+            "frontRise": { "value": 28, "unit": "cm", "type": "length", "landmark": "cós frontal até encontro do gancho" },
+            "outseamLength": { "value": 107, "unit": "cm", "type": "length", "landmark": "cós lateral até barra" }
+          }
+        },
+        {
+          "size": "G",
+          "measurements": {
+            "waistWidth": { "value": 88, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do cós" },
+            "hipWidth": { "value": 110, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do quadril" },
+            "thighWidth": { "value": 66, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da coxa, próximo ao gancho" },
+            "legOpening": { "value": 60, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da abertura de cada perna" },
+            "length": { "value": 78, "unit": "cm", "type": "length", "landmark": "gancho até a barra pela parte interna" },
+            "depth": { "value": 28, "unit": "cm", "type": "length", "landmark": "profundidade geométrica entre frente e costas" },
+            "crotchDepth": { "value": 26, "unit": "cm", "type": "length", "landmark": "profundidade geométrica da região do gancho" },
+            "crotchWidth": { "value": 14, "unit": "cm", "type": "linear", "landmark": "distância entre os centros das pernas" },
+            "rise": { "value": 29, "unit": "cm", "type": "length", "landmark": "altura entre a região do gancho e o cós" },
+            "kneeCircumference": { "value": 56, "unit": "cm", "type": "circumference", "landmark": "linha do joelho" },
+            "hemCircumference": { "value": 60, "unit": "cm", "type": "circumference", "landmark": "abertura da barra de cada perna" },
+            "frontRise": { "value": 29, "unit": "cm", "type": "length", "landmark": "cós frontal até encontro do gancho" },
+            "outseamLength": { "value": 109, "unit": "cm", "type": "length", "landmark": "cós lateral até barra" }
+          }
+        }
+      ],
+      "slug": "fitsense-calca-wide-leg"
+    },
+    {
+      "id": "3",
+      "sku": "FS-VES-001",
+      "name": "Vestido Serena",
+      "category": "dress",
+      "categoryLabel": "Vestidos",
+      "price": 289.9,
+      "description": "Vestido de modelagem levemente evasê, sem mangas e comprimento acima do joelho.",
+      "images": {
+        "front": "https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&w=1200&q=90",
+        "back": "https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&w=1200&q=90"
+      },
+      "colors": [
+        { "name": "Preto", "hex": "#171717" },
+        { "name": "Vinho", "hex": "#713447" }
+      ],
+      "material": {
+        "composition": "95% poliéster, 5% elastano (referência fictícia)",
+        "elasticity": "medium",
+        "elasticityLabel": "Média"
+      },
+      "model": {
+        "fit": "slightly-a-line",
+        "sleeves": false,
+        "neckline": "round",
+        "geometryProfile": "dress-a-line"
+      },
+      "measurementConvention": "Medidas fictícias da peça pronta. bustWidth, waistWidth e hipWidth representam circunferências completas da peça, não larguras planas. shoulderWidth representa a largura linear entre os ombros. length representa o comprimento total do vestido, do ombro à barra. depth representa a profundidade geométrica total entre frente e costas. strapWidth representa a largura linear de cada alça. armholeDepth representa a distância vertical entre a extremidade superior do ombro e a linha inferior da cava. frontNeckDepth e backNeckDepth representam as profundidades dos decotes frontal e traseiro, medidas a partir da linha superior dos ombros. Todas as medidas são fornecidas em centímetros e convertidas para metros pelo adaptador do CAIMENT.",
+      "sizes": [
+        {
+          "size": "P",
+          "measurements": {
+            "bustWidth": { "value": 92, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha do busto" },
+            "waistWidth": { "value": 80, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da cintura" },
+            "hipWidth": { "value": 100, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na região mais larga do quadril" },
+            "length": { "value": 92, "unit": "cm", "type": "length", "landmark": "ombro até a barra" },
+            "shoulderWidth": { "value": 37, "unit": "cm", "type": "linear", "landmark": "costura a costura dos ombros" },
+            "depth": { "value": 20, "unit": "cm", "type": "length", "landmark": "profundidade geométrica total entre frente e costas" },
+            "strapWidth": { "value": 5, "unit": "cm", "type": "linear", "landmark": "largura de cada alça" },
+            "armholeDepth": { "value": 21, "unit": "cm", "type": "length", "landmark": "ombro até linha inferior da cava" },
+            "frontNeckDepth": { "value": 12, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote frontal" },
+            "backNeckDepth": { "value": 4, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote traseiro" }
+          }
+        },
+        {
+          "size": "M",
+          "measurements": {
+            "bustWidth": { "value": 98, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha do busto" },
+            "waistWidth": { "value": 86, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da cintura" },
+            "hipWidth": { "value": 106, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na região mais larga do quadril" },
+            "length": { "value": 95, "unit": "cm", "type": "length", "landmark": "ombro até a barra" },
+            "shoulderWidth": { "value": 39, "unit": "cm", "type": "linear", "landmark": "costura a costura dos ombros" },
+            "depth": { "value": 21, "unit": "cm", "type": "length", "landmark": "profundidade geométrica total entre frente e costas" },
+            "strapWidth": { "value": 5.5, "unit": "cm", "type": "linear", "landmark": "largura de cada alça" },
+            "armholeDepth": { "value": 22, "unit": "cm", "type": "length", "landmark": "ombro até linha inferior da cava" },
+            "frontNeckDepth": { "value": 12.5, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote frontal" },
+            "backNeckDepth": { "value": 4.5, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote traseiro" }
+          }
+        },
+        {
+          "size": "G",
+          "measurements": {
+            "bustWidth": { "value": 104, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha do busto" },
+            "waistWidth": { "value": 92, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na linha da cintura" },
+            "hipWidth": { "value": 112, "unit": "cm", "type": "circumference", "landmark": "circunferência completa na região mais larga do quadril" },
+            "length": { "value": 98, "unit": "cm", "type": "length", "landmark": "ombro até a barra" },
+            "shoulderWidth": { "value": 41, "unit": "cm", "type": "linear", "landmark": "costura a costura dos ombros" },
+            "depth": { "value": 22, "unit": "cm", "type": "length", "landmark": "profundidade geométrica total entre frente e costas" },
+            "strapWidth": { "value": 6, "unit": "cm", "type": "linear", "landmark": "largura de cada alça" },
+            "armholeDepth": { "value": 23, "unit": "cm", "type": "length", "landmark": "ombro até linha inferior da cava" },
+            "frontNeckDepth": { "value": 13, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote frontal" },
+            "backNeckDepth": { "value": 5, "unit": "cm", "type": "length", "landmark": "linha dos ombros até o ponto mais baixo do decote traseiro" }
+          }
+        }
+      ],
+      "slug": "fitsense-vestido-serena"
+    },
+    {
+      "id": "4",
+      "sku": "FS-SHO-001",
+      "name": "Short Casual",
+      "category": "lower",
+      "categoryLabel": "Shorts",
+      "price": 159.9,
+      "description": "Short casual de cintura média, pernas retas e comprimento curto.",
+      "images": {
+        "front": "https://images.unsplash.com/photo-1591195853828-11db59a44f6b?auto=format&fit=crop&w=1200&q=90",
+        "back": "https://images.unsplash.com/photo-1591195853828-11db59a44f6b?auto=format&fit=crop&w=1200&q=90"
+      },
+      "colors": [
+        { "name": "Areia", "hex": "#C8B99F" },
+        { "name": "Preto", "hex": "#171717" }
+      ],
+      "material": {
+        "composition": "100% algodão (referência fictícia)",
+        "elasticity": "none",
+        "elasticityLabel": "Sem elasticidade"
+      },
+      "model": {
+        "fit": "regular",
+        "waist": "mid-rise",
+        "geometryProfile": "shorts-basic"
+      },
+      "measurementConvention": "Medidas fictícias da peça pronta. waistWidth, hipWidth, thighWidth e legOpening representam circunferências completas da peça. length representa o comprimento interno da perna, do gancho à barra. outseamLength representa o comprimento externo, do cós à barra. crotchDepth representa a profundidade geométrica do gancho. crotchWidth representa a distância entre os centros das pernas. rise representa a altura do gancho até o cós. frontRise representa a altura frontal do cós até o encontro do gancho. depth representa a profundidade geométrica entre frente e costas. Todas as medidas são fornecidas em centímetros e convertidas para metros pelo adaptador do CAIMENT.",
+      "sizes": [
+        {
+          "size": "P",
+          "measurements": {
+            "waistWidth": { "value": 76, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do cós" },
+            "hipWidth": { "value": 98, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do quadril" },
+            "thighWidth": { "value": 62, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da coxa" },
+            "legOpening": { "value": 54, "unit": "cm", "type": "circumference", "landmark": "circunferência da abertura de cada perna" },
+            "length": { "value": 12, "unit": "cm", "type": "length", "landmark": "gancho até barra pela parte interna" },
+            "depth": { "value": 24, "unit": "cm", "type": "length", "landmark": "profundidade geométrica entre frente e costas" },
+            "crotchDepth": { "value": 9, "unit": "cm", "type": "length", "landmark": "profundidade geométrica do gancho" },
+            "crotchWidth": { "value": 12, "unit": "cm", "type": "linear", "landmark": "distância entre os centros das pernas" },
+            "rise": { "value": 26, "unit": "cm", "type": "length", "landmark": "altura entre a região do gancho e o cós" },
+            "frontRise": { "value": 26, "unit": "cm", "type": "length", "landmark": "cós frontal até encontro do gancho" },
+            "outseamLength": { "value": 39, "unit": "cm", "type": "length", "landmark": "cós lateral até barra" }
+          }
+        },
+        {
+          "size": "M",
+          "measurements": {
+            "waistWidth": { "value": 82, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do cós" },
+            "hipWidth": { "value": 104, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do quadril" },
+            "thighWidth": { "value": 66, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da coxa" },
+            "legOpening": { "value": 58, "unit": "cm", "type": "circumference", "landmark": "circunferência da abertura de cada perna" },
+            "length": { "value": 13, "unit": "cm", "type": "length", "landmark": "gancho até barra pela parte interna" },
+            "depth": { "value": 25, "unit": "cm", "type": "length", "landmark": "profundidade geométrica entre frente e costas" },
+            "crotchDepth": { "value": 10, "unit": "cm", "type": "length", "landmark": "profundidade geométrica do gancho" },
+            "crotchWidth": { "value": 13, "unit": "cm", "type": "linear", "landmark": "distância entre os centros das pernas" },
+            "rise": { "value": 27, "unit": "cm", "type": "length", "landmark": "altura entre a região do gancho e o cós" },
+            "frontRise": { "value": 27, "unit": "cm", "type": "length", "landmark": "cós frontal até encontro do gancho" },
+            "outseamLength": { "value": 41, "unit": "cm", "type": "length", "landmark": "cós lateral até barra" }
+          }
+        },
+        {
+          "size": "G",
+          "measurements": {
+            "waistWidth": { "value": 88, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do cós" },
+            "hipWidth": { "value": 110, "unit": "cm", "type": "circumference", "landmark": "circunferência completa do quadril" },
+            "thighWidth": { "value": 70, "unit": "cm", "type": "circumference", "landmark": "circunferência completa da coxa" },
+            "legOpening": { "value": 62, "unit": "cm", "type": "circumference", "landmark": "circunferência da abertura de cada perna" },
+            "length": { "value": 14, "unit": "cm", "type": "length", "landmark": "gancho até barra pela parte interna" },
+            "depth": { "value": 26, "unit": "cm", "type": "length", "landmark": "profundidade geométrica entre frente e costas" },
+            "crotchDepth": { "value": 11, "unit": "cm", "type": "length", "landmark": "profundidade geométrica do gancho" },
+            "crotchWidth": { "value": 14, "unit": "cm", "type": "linear", "landmark": "distância entre os centros das pernas" },
+            "rise": { "value": 28, "unit": "cm", "type": "length", "landmark": "altura entre a região do gancho e o cós" },
+            "frontRise": { "value": 28, "unit": "cm", "type": "length", "landmark": "cós frontal até encontro do gancho" },
+            "outseamLength": { "value": 43, "unit": "cm", "type": "length", "landmark": "cós lateral até barra" }
+          }
+        }
+      ],
+      "slug": "fitsense-short-casual"
+    }
+  ]
+}
