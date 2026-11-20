@@ -43,6 +43,9 @@ type CatalogProduct = {
   price: number;
   description: string;
 
+  // Opcional: o catálogo não precisa ser alterado.
+  clothingModel?: string;
+
   images: {
     front: string;
     back: string;
@@ -81,6 +84,39 @@ type ProductCatalog = {
 const catalog = productCatalogRaw as ProductCatalog;
 
 // ============================================================
+// MODELOS 3D — MAPEAMENTO SEPARADO DO CATÁLOGO
+// ============================================================
+
+// Cadastre aqui o caminho público de cada arquivo GLB.
+// A chave deve ser o ID do produto existente no products.json.
+//
+// Exemplo:
+// '1': '/models/clothes/camiseta-essential.glb'
+
+const CLOTHING_MODELS_BY_PRODUCT_ID: Record<string, string> = {
+  '1': '/models/clothes/camiseta-essential.glb',
+
+  // Adicione os demais produtos usando seus IDs e caminhos reais:
+  // '2': '/models/clothes/arquivo-real-short.glb',
+  // '3': '/models/clothes/arquivo-real-vestido.glb',
+  // '4': '/models/clothes/arquivo-real-calca.glb',
+};
+
+function getClothingModel(product: CatalogProduct): string {
+  const clothingModel =
+    product.clothingModel?.trim() ||
+    CLOTHING_MODELS_BY_PRODUCT_ID[String(product.id)]?.trim();
+
+  if (!clothingModel) {
+    throw new Error(
+      `O produto "${product.name}" (ID ${product.id}) ainda não possui um arquivo GLB cadastrado. Configure o caminho em CLOTHING_MODELS_BY_PRODUCT_ID.`,
+    );
+  }
+
+  return clothingModel;
+}
+
+// ============================================================
 // CONTRATO DE INTEGRAÇÃO COM O CAIMENT
 // ============================================================
 
@@ -98,6 +134,10 @@ type CaimentProductPayload = {
   categoryLabel: string;
   price: number;
   image: string;
+
+  // Obrigatório no payload enviado ao CAIMENT.
+  clothingModel: string;
+
   size: string;
   color: string;
 
@@ -154,58 +194,6 @@ type CartItem = {
 };
 
 // ============================================================
-// CONTRATOS DE MEDIDAS DOS GERADORES
-// ============================================================
-
-const REQUIRED_GEOMETRY_MEASUREMENTS: Record<
-  CaimentGarmentType,
-  string[]
-> = {
-  // tshirt representa a regata no CAIMENT.
-  tshirt: [
-    'width',
-    'height',
-    'depth',
-    'shoulderWidth',
-    'neckWidth',
-  ],
-
-  dress: [
-    'bustWidth',
-    'waistWidth',
-    'hipWidth',
-    'shoulderWidth',
-    'length',
-    'depth',
-    'strapWidth',
-  ],
-
-  pants: [
-    'waistWidth',
-    'hipWidth',
-    'thighWidth',
-    'legOpening',
-    'length',
-    'depth',
-    'crotchDepth',
-    'crotchWidth',
-    'rise',
-  ],
-
-  short: [
-    'waistWidth',
-    'hipWidth',
-    'thighWidth',
-    'legOpening',
-    'length',
-    'depth',
-    'crotchDepth',
-    'crotchWidth',
-    'rise',
-  ],
-};
-
-// ============================================================
 // CONVERSÃO DO CATÁLOGO
 // ============================================================
 
@@ -232,6 +220,46 @@ function getGarmentCategory(
       );
   }
 }
+
+// ============================================================
+// VALIDAÇÃO DO CAMINHO DO MODELO 3D
+// ============================================================
+
+function validateClothingModelPath(
+  clothingModel: unknown,
+  productName: string,
+): asserts clothingModel is string {
+  if (
+    typeof clothingModel !== 'string' ||
+    clothingModel.trim().length === 0
+  ) {
+    throw new Error(
+      `O produto "${productName}" não possui um caminho de modelo 3D cadastrado.`,
+    );
+  }
+
+  const isLocalPath =
+    clothingModel.startsWith('/models/');
+
+  const isExternalUrl =
+    /^https?:\/\/.+/i.test(clothingModel);
+
+  if (!isLocalPath && !isExternalUrl) {
+    throw new Error(
+      `O caminho do modelo 3D de "${productName}" é inválido: ${clothingModel}. Informe um caminho público em /models/ ou uma URL HTTP/HTTPS.`,
+    );
+  }
+
+  if (/\s/.test(clothingModel)) {
+    throw new Error(
+      `O caminho do modelo 3D de "${productName}" contém espaços.`,
+    );
+  }
+}
+
+// ============================================================
+// VALIDAÇÃO DA ESTRUTURA DO CATÁLOGO
+// ============================================================
 
 function validateCatalogStructure() {
   if (
@@ -443,44 +471,6 @@ function getSelectedMeasurements(
 }
 
 // ============================================================
-// VALIDAÇÃO DOS CONTRATOS GEOMÉTRICOS
-// ============================================================
-
-function validateGeometryMeasurements(
-  category: CaimentGarmentType,
-  measurements: Record<string, CatalogMeasurement>,
-  productName: string,
-  size: string,
-) {
-  const requiredFields =
-    REQUIRED_GEOMETRY_MEASUREMENTS[category];
-
-  const missingFields = requiredFields.filter(
-    (field) =>
-      !Object.prototype.hasOwnProperty.call(
-        measurements,
-        field,
-      ),
-  );
-
-  if (missingFields.length > 0) {
-    throw new Error(
-      `O produto "${productName}", tamanho ${size}, ainda não possui todas as medidas exigidas pelo gerador de ${category}. Campos ausentes: ${missingFields.join(', ')}. Atualize o catálogo FitSense com as medidas correspondentes ao contrato do CAIMENT.`,
-    );
-  }
-
-  for (const field of requiredFields) {
-    const measurement = measurements[field];
-
-    if (!measurement || measurement.unit !== 'cm') {
-      throw new Error(
-        `A medida obrigatória "${field}" de "${productName}" precisa estar cadastrada em centímetros.`,
-      );
-    }
-  }
-}
-
-// ============================================================
 // MEDIDAS DE TODOS OS TAMANHOS
 // ============================================================
 
@@ -493,8 +483,6 @@ function getAllProductSizes(
     );
   }
 
-  const category = getGarmentCategory(product);
-
   return product.sizes.map((item) => {
     const measurements = getSelectedMeasurements(
       product,
@@ -506,13 +494,6 @@ function getAllProductSizes(
         `Não existem medidas válidas para o tamanho ${item.size}.`,
       );
     }
-
-    validateGeometryMeasurements(
-      category,
-      measurements,
-      product.name,
-      item.size,
-    );
 
     return {
       size: item.size,
@@ -632,7 +613,6 @@ export default function FitsenseProductPage() {
     );
   }
 
-  // A partir daqui, product é garantidamente Product.
   const product: Product = foundProduct;
 
   const selectedProductColor =
@@ -655,6 +635,16 @@ export default function FitsenseProductPage() {
         product.catalogProduct,
       );
 
+      // Obtém o GLB pelo mapeamento separado do catálogo.
+      const clothingModel = getClothingModel(
+        product.catalogProduct,
+      );
+
+      validateClothingModelPath(
+        clothingModel,
+        product.name,
+      );
+
       const referenceSize =
         selectedSize ?? getReferenceSize(product);
 
@@ -669,13 +659,6 @@ export default function FitsenseProductPage() {
         );
       }
 
-      validateGeometryMeasurements(
-        category,
-        measurements,
-        product.name,
-        referenceSize,
-      );
-
       const sizes = getAllProductSizes(
         product.catalogProduct,
       );
@@ -688,6 +671,9 @@ export default function FitsenseProductPage() {
         categoryLabel: product.categoryLabel,
         price: product.price,
         image: product.image,
+
+        clothingModel,
+
         size: referenceSize,
         color: selectedProductColor.name,
 
@@ -702,6 +688,11 @@ export default function FitsenseProductPage() {
         catalogVersion: catalog.catalogVersion,
       };
 
+      console.log(
+        '[FITSENSE] Arquivo 3D enviado:',
+        selectedProduct.clothingModel,
+      );
+
       return selectedProduct;
     } catch (error) {
       console.error(
@@ -712,7 +703,7 @@ export default function FitsenseProductPage() {
       alert(
         error instanceof Error
           ? error.message
-          : 'Não foi possível preparar as medidas da peça.',
+          : 'Não foi possível preparar os dados da peça.',
       );
 
       return null;
@@ -847,6 +838,11 @@ export default function FitsenseProductPage() {
       console.log(
         'Produto recebido pelo backend do CAIMENT:',
         responseData.data,
+      );
+
+      console.log(
+        '[FITSENSE] Arquivo 3D:',
+        selectedProduct.clothingModel,
       );
 
       console.log(
@@ -1228,7 +1224,7 @@ export default function FitsenseProductPage() {
 
       <footer className="mt-20 border-t border-black/5 bg-[#F8F7F4]">
 
-        <div className="mx-auto flex max-w-7xl flex-col gap-8 px-5 py-12 sm:px-8 md:flex-row md:items-center md:justify-between">
+        <div className="mx-auto flex max-w-7xl flex-col gap-8 px-5 py-12 sm:flex-row sm:items-center sm:justify-between sm:px-8">
 
           <div>
             <p className="text-xl font-semibold tracking-[-0.04em]">

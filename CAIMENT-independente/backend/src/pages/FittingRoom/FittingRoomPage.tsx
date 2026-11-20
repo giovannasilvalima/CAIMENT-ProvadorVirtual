@@ -1,6 +1,4 @@
-
 import { useEffect, useMemo, useState } from 'react';
-import type { Object3D } from 'three';
 import { Link } from 'react-router-dom';
 
 import {
@@ -25,12 +23,6 @@ import { getMeasurements } from '@/services/firebase/measurements';
 
 import { formatCurrency } from '@/utils/format';
 
-import { createGarment } from '../../features/clothing';
-
-import {
-  adaptStoreProductMeasurements,
-} from '../../features/clothing/geometry/garmentMeasurementsAdapter';
-
 import {
   recommendSize,
   type UserMeasurements,
@@ -38,16 +30,8 @@ import {
   type SizeRecommendationResult,
 } from '@/features/clothing/recommendation/SizeRecommendation';
 
-// ============================================================
-// CONSTANTES
-// ============================================================
-
 const PRODUCT_STORAGE_KEY = 'caiment_product';
 const LEGACY_PRODUCT_STORAGE_KEY = 'caiment_selected_product';
-
-// ============================================================
-// TIPOS
-// ============================================================
 
 interface SelectedProduct {
   id: string;
@@ -64,10 +48,6 @@ interface SelectedProduct {
 
 type ProductPayload = Record<string, unknown>;
 
-// ============================================================
-// UTILITÁRIOS
-// ============================================================
-
 function isObject(value: unknown): value is ProductPayload {
   return (
     typeof value === 'object' &&
@@ -78,10 +58,7 @@ function isObject(value: unknown): value is ProductPayload {
 
 function getString(...values: unknown[]): string | undefined {
   for (const value of values) {
-    if (
-      typeof value === 'string' &&
-      value.trim().length > 0
-    ) {
+    if (typeof value === 'string' && value.trim().length > 0) {
       return value.trim();
     }
   }
@@ -91,17 +68,11 @@ function getString(...values: unknown[]): string | undefined {
 
 function getNumber(...values: unknown[]): number {
   for (const value of values) {
-    if (
-      typeof value === 'number' &&
-      Number.isFinite(value)
-    ) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
       return value;
     }
 
-    if (
-      typeof value === 'string' &&
-      value.trim().length > 0
-    ) {
+    if (typeof value === 'string' && value.trim().length > 0) {
       const parsed = Number(value.replace(',', '.'));
 
       if (Number.isFinite(parsed)) {
@@ -112,10 +83,6 @@ function getNumber(...values: unknown[]): number {
 
   return 0;
 }
-
-// ============================================================
-// NORMALIZAÇÃO DOS TAMANHOS
-// ============================================================
 
 function normalizeProductSizes(value: unknown): ProductSize[] {
   if (!Array.isArray(value)) {
@@ -137,33 +104,39 @@ function normalizeProductSizes(value: unknown): ProductSize[] {
 
     normalized.push({
       size,
-      measurements:
-        item.measurements as ProductSize['measurements'],
+      measurements: item.measurements as ProductSize['measurements'],
     });
   }
 
   return normalized;
 }
 
-// ============================================================
-// NORMALIZAÇÃO DO PRODUTO
-// ============================================================
-
 function normalizeProduct(
   payload: ProductPayload,
 ): SelectedProduct | null {
-  const nestedProduct = isObject(payload.product)
-    ? payload.product
+  const data = isObject(payload.data)
+    ? payload.data
     : {};
+
+  const nestedProduct = isObject(data.product)
+    ? data.product
+    : isObject(payload.product)
+      ? payload.product
+      : data;
 
   const variant = isObject(payload.selectedVariant)
     ? payload.selectedVariant
     : isObject(payload.variant)
       ? payload.variant
-      : {};
+      : isObject(nestedProduct.selectedVariant)
+        ? nestedProduct.selectedVariant
+        : isObject(nestedProduct.variant)
+          ? nestedProduct.variant
+          : {};
 
   const combined: ProductPayload = {
     ...payload,
+    ...data,
     ...nestedProduct,
   };
 
@@ -189,10 +162,18 @@ function normalizeProduct(
   }
 
   const clothingModel = getString(
-    combined.clothingModel,
-    combined.clothingModelUrl,
-    combined.model3dUrl,
-    combined.modelUrl,
+    nestedProduct.clothingModel,
+    nestedProduct.clothingModelUrl,
+    nestedProduct.model3dUrl,
+    nestedProduct.modelUrl,
+    data.clothingModel,
+    data.clothingModelUrl,
+    data.model3dUrl,
+    data.modelUrl,
+    payload.clothingModel,
+    payload.clothingModelUrl,
+    payload.model3dUrl,
+    payload.modelUrl,
   );
 
   const images = isObject(combined.images)
@@ -211,7 +192,6 @@ function normalizeProduct(
 
   return {
     ...combined,
-
     id,
     name,
 
@@ -249,10 +229,6 @@ function normalizeProduct(
     sizes,
   } as SelectedProduct;
 }
-
-// ============================================================
-// RECUPERAÇÃO DO PRODUTO
-// ============================================================
 
 function recoverSelectedProduct(): SelectedProduct | null {
   const params = new URLSearchParams(window.location.search);
@@ -314,10 +290,6 @@ function recoverSelectedProduct(): SelectedProduct | null {
   }
 }
 
-// ============================================================
-// MEDIDAS DO USUÁRIO PARA RECOMENDAÇÃO
-// ============================================================
-
 function getUserMeasurementsForRecommendation(
   input: unknown,
 ): UserMeasurements {
@@ -344,20 +316,13 @@ function getUserMeasurementsForRecommendation(
   for (const key of supportedMeasurements) {
     const value = source[key];
 
-    if (
-      typeof value === 'number' ||
-      isObject(value)
-    ) {
+    if (typeof value === 'number' || isObject(value)) {
       result[key] = value as UserMeasurements[string];
     }
   }
 
   return result;
 }
-
-// ============================================================
-// RECOMENDAÇÃO DE TAMANHO
-// ============================================================
 
 function RecommendationPanel({
   recommendation,
@@ -508,16 +473,11 @@ function RecommendationPanel({
       <p className="mt-4 border-t border-caiment-line pt-3 text-[11px] leading-5 text-caiment-ink-soft">
         A recomendação é baseada nas medidas corporais e nas
         dimensões técnicas fornecidas pela loja. Ela não altera
-        o tamanho de referência utilizado na geração da geometria
-        da peça.
+        as proporções originais do modelo 3D da peça.
       </p>
     </Card>
   );
 }
-
-// ============================================================
-// PÁGINA DO PROVADOR
-// ============================================================
 
 export default function FittingRoomPage() {
   const { user } = useAuth();
@@ -531,15 +491,6 @@ export default function FittingRoomPage() {
   const [product, setProduct] =
     useState<SelectedProduct | null>(null);
 
-  const [clothingObject, setClothingObject] =
-    useState<Object3D | null>(null);
-
-  const [garmentLoading, setGarmentLoading] =
-    useState(false);
-
-  const [garmentError, setGarmentError] =
-    useState<string | null>(null);
-
   const [measurementsReady, setMeasurementsReady] =
     useState<boolean | null>(null);
 
@@ -551,9 +502,8 @@ export default function FittingRoomPage() {
   const [loadError, setLoadError] =
     useState<string | null>(null);
 
-  // ==========================================================
-  // RECOMENDAÇÃO DE TAMANHO
-  // ==========================================================
+  const clothingModelUrl =
+    product?.clothingModel ?? null;
 
   const recommendation = useMemo<SizeRecommendationResult>(
     () => {
@@ -593,10 +543,6 @@ export default function FittingRoomPage() {
     [product, measurements],
   );
 
-  // ==========================================================
-  // CARREGAMENTO DO PRODUTO, PERFIL, MEDIDAS E AVATAR
-  // ==========================================================
-
   useEffect(() => {
     let cancelled = false;
 
@@ -605,6 +551,7 @@ export default function FittingRoomPage() {
         setMeasurementsReady(false);
         setAvatarReady(false);
         setModelUrl(null);
+        setProduct(null);
         return;
       }
 
@@ -627,6 +574,11 @@ export default function FittingRoomPage() {
           );
 
           console.log(
+            'CAIMENT: arquivo 3D recebido:',
+            recoveredProduct.clothingModel,
+          );
+
+          console.log(
             'CAIMENT: tamanhos recebidos:',
             recoveredProduct.sizes,
           );
@@ -646,15 +598,8 @@ export default function FittingRoomPage() {
           return;
         }
 
-        console.log(
-          'CAIMENT: perfil:',
-          profile,
-        );
-
-        console.log(
-          'CAIMENT: medidas do Firebase:',
-          userMeasurements,
-        );
+        console.log('CAIMENT: perfil:', profile);
+        console.log('CAIMENT: medidas do Firebase:', userMeasurements);
 
         setMeasurements(userMeasurements);
 
@@ -694,170 +639,6 @@ export default function FittingRoomPage() {
     };
   }, [user]);
 
-  // ==========================================================
-  // PIPELINE DE GERAÇÃO DA ROUPA
-  // ==========================================================
-
-  
-  useEffect(() => {
-    let cancelled = false;
-
-    setClothingObject(null);
-    setGarmentError(null);
-
-    if (!product) {
-      setGarmentLoading(false);
-      return;
-    }
-
-    function generateGarment(selectedProduct: SelectedProduct) {
-      setGarmentLoading(true);
-
-      try {
-        // ETAPA 1 — ADAPTAÇÃO DAS MEDIDAS DA LOJA
-
-        console.log(
-          'CAIMENT: iniciando adaptação do produto:',
-          selectedProduct,
-        );
-
-        const adapted = adaptStoreProductMeasurements(
-          selectedProduct as Parameters<
-            typeof adaptStoreProductMeasurements
-          >[0],
-          selectedProduct.size,
-        );
-
-        if (
-          !adapted ||
-          !adapted.measurements ||
-          !adapted.type
-        ) {
-          throw new Error(
-            'O adaptador não retornou as medidas necessárias para gerar a peça.',
-          );
-        }
-
-        console.log(
-          'CAIMENT: medidas comerciais adaptadas:',
-          adapted,
-        );
-
-        // ETAPA 2 — GERAÇÃO PROCEDURAL
-
-        const garment = createGarment({
-          id: adapted.productId,
-          name: adapted.productName,
-          type: adapted.type,
-          measurements: adapted.measurements,
-        } as Parameters<typeof createGarment>[0]);
-
-        if (!garment?.group) {
-          throw new Error(
-            'O gerador não retornou um grupo 3D válido.',
-          );
-        }
-
-        // ETAPA 3 — IDENTIFICAÇÃO E METADADOS
-
-        const group = garment.group;
-
-        group.name =
-          `CAIMENT_GARMENT_${adapted.productId}`;
-
-        const originalUserData = {
-          ...group.userData,
-        };
-
-        const garmentFit =
-          originalUserData.garmentFit ??
-          garment.meshData?.fit;
-
-        group.userData = {
-          ...originalUserData,
-
-          productId: adapted.productId,
-          productName: adapted.productName,
-          selectedSize: adapted.size,
-          garmentType: adapted.type,
-          generatedBy: 'CAIMENT',
-          garmentMeasurements: adapted.measurements,
-          garmentMeshData: garment.meshData,
-
-          ...(garmentFit
-            ? { garmentFit }
-            : {}),
-
-          fittingStatus: 'awaiting_avatar_alignment',
-        };
-
-        group.updateMatrixWorld(true);
-
-        if (cancelled) {
-          return;
-        }
-
-        setClothingObject(group);
-
-        console.log(
-          'CAIMENT: geometria gerada:',
-          garment,
-        );
-
-        console.log(
-          'CAIMENT: tipo da peça:',
-          adapted.type,
-        );
-
-        console.log(
-          'CAIMENT: tamanho de referência:',
-          adapted.size,
-        );
-
-        console.log(
-          'CAIMENT: garmentFit:',
-          garmentFit,
-        );
-
-        console.log(
-          'CAIMENT: metadados:',
-          group.userData,
-        );
-      } catch (error) {
-        console.error(
-          'CAIMENT: erro no pipeline de geração da roupa:',
-          error,
-        );
-
-        if (!cancelled) {
-          setClothingObject(null);
-
-          setGarmentError(
-            error instanceof Error
-              ? error.message
-              : 'Não foi possível gerar a geometria da peça.',
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setGarmentLoading(false);
-        }
-      }
-    }
-
-    // Neste ponto, product já foi validado como não nulo.
-    generateGarment(product);
-
-    return () => {
-      cancelled = true;
-    };
-  }, [product]);
-
-
-  // ==========================================================
-  // CARREGAMENTO
-  // ==========================================================
-
   if (measurementsReady === null) {
     return (
       <DashboardLayout title="Provador virtual">
@@ -873,10 +654,6 @@ export default function FittingRoomPage() {
       </DashboardLayout>
     );
   }
-
-  // ==========================================================
-  // USUÁRIO SEM MEDIDAS CONCLUÍDAS
-  // ==========================================================
 
   if (!measurementsReady) {
     return (
@@ -923,10 +700,6 @@ export default function FittingRoomPage() {
     );
   }
 
-  // ==========================================================
-  // PROVADOR VIRTUAL
-  // ==========================================================
-
   return (
     <DashboardLayout title="Provador virtual">
       <div className="space-y-6">
@@ -969,48 +742,42 @@ export default function FittingRoomPage() {
           </Card>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-            {/* AVATAR E ROUPA */}
-
             <Card padding="none" className="overflow-hidden">
               <div className="relative overflow-hidden rounded-3xl bg-caiment-purple-50/60 p-3">
                 {avatarReady && modelUrl ? (
                   <>
-                    <AvatarViewer
-                      modelUrl={modelUrl}
-                      clothingObject={clothingObject}
-                      measurements={measurements}
-                      className="h-[820px]"
-                    />
+                    {clothingModelUrl ? (
+                      <AvatarViewer
+                        key={`${product.id}-${clothingModelUrl}`}
+                        modelUrl={modelUrl}
+                        clothingModelUrl={clothingModelUrl}
+                        measurements={measurements}
+                        className="h-[820px]"
+                      />
+                    ) : (
+                      <div className="flex min-h-[820px] flex-col items-center justify-center rounded-3xl bg-caiment-ink px-8 py-12 text-center">
+                        <AlertCircle
+                          size={32}
+                          className="text-amber-300"
+                        />
 
-                    {garmentLoading && (
-                      <div className="absolute bottom-6 left-6 right-6 rounded-2xl border border-caiment-purple-100 bg-white/95 p-4 shadow-lg">
-                        <div className="flex items-center gap-3">
-                          <div className="h-5 w-5 animate-spin rounded-full border-2 border-caiment-purple-200 border-t-caiment-purple-600" />
+                        <h3 className="mt-5 font-display text-xl font-medium text-white">
+                          Modelo 3D não informado
+                        </h3>
 
-                          <div>
-                            <p className="text-sm font-semibold text-caiment-ink">
-                              Gerando sua peça 3D
-                            </p>
-
-                            <p className="mt-1 text-xs text-caiment-ink-soft">
-                              Preparando a geometria a partir das medidas da loja.
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {!garmentLoading && garmentError && (
-                      <div className="absolute bottom-6 left-6 right-6 rounded-2xl border border-red-200 bg-white/95 p-4 shadow-lg">
-                        <p className="text-sm font-semibold text-red-900">
-                          Não foi possível gerar a peça
-                        </p>
-
-                        <p className="mt-1 text-xs leading-relaxed text-red-800">
-                          {garmentError}
+                        <p className="mt-2 max-w-sm text-sm leading-relaxed text-white/70">
+                          A loja não enviou o caminho do arquivo 3D desta peça.
                         </p>
                       </div>
                     )}
+
+                    <div className="absolute left-6 top-6 flex items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm backdrop-blur">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-caiment-lime-deep" />
+
+                      <span className="text-xs font-semibold text-caiment-ink">
+                        Avatar carregado
+                      </span>
+                    </div>
                   </>
                 ) : (
                   <div className="relative flex min-h-[820px] flex-col items-center justify-center overflow-hidden rounded-3xl bg-caiment-ink px-8 py-12 text-center">
@@ -1031,16 +798,6 @@ export default function FittingRoomPage() {
                         Criar meu avatar
                       </Button>
                     </Link>
-                  </div>
-                )}
-
-                {avatarReady && modelUrl && (
-                  <div className="absolute left-6 top-6 flex items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm backdrop-blur">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-caiment-lime-deep" />
-
-                    <span className="text-xs font-semibold text-caiment-ink">
-                      Avatar carregado
-                    </span>
                   </div>
                 )}
               </div>
@@ -1069,8 +826,6 @@ export default function FittingRoomPage() {
                 </Link>
               </div>
             </Card>
-
-            {/* INFORMAÇÕES DA PEÇA */}
 
             <div className="flex flex-col gap-4">
               <Card>
@@ -1113,7 +868,7 @@ export default function FittingRoomPage() {
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <div className="rounded-2xl bg-caiment-purple-50 p-4">
                     <p className="text-xs text-caiment-ink-soft">
-                      Referência da geometria
+                      Referência da peça
                     </p>
 
                     <p className="mt-1 text-lg font-semibold text-caiment-ink">
@@ -1137,53 +892,39 @@ export default function FittingRoomPage() {
                 recommendation={recommendation}
               />
 
-              {/* STATUS DA GERAÇÃO */}
-
               <div className="rounded-2xl border border-caiment-purple-100 bg-caiment-purple-50 p-4">
                 <div className="flex items-center gap-2">
                   <span
                     className={`h-2 w-2 rounded-full ${
-                      clothingObject
+                      clothingModelUrl
                         ? 'bg-green-500'
-                        : garmentLoading
-                          ? 'animate-pulse bg-amber-500'
-                          : garmentError
-                            ? 'bg-red-500'
-                            : 'bg-caiment-purple-400'
+                        : 'bg-amber-500'
                     }`}
                   />
 
                   <span className="text-xs font-medium text-caiment-ink">
-                    {clothingObject
-                      ? 'Geometria procedural gerada'
-                      : garmentLoading
-                        ? 'Gerando geometria da peça'
-                        : garmentError
-                          ? 'Erro na geração da peça'
-                          : 'Aguardando geração da peça'}
+                    {clothingModelUrl
+                      ? 'Arquivo 3D da peça identificado'
+                      : 'Arquivo 3D não informado'}
                   </span>
                 </div>
 
-                {clothingObject && (
+                {clothingModelUrl && (
                   <div className="mt-3 border-t border-caiment-purple-100 pt-3">
                     <p className="text-xs text-caiment-ink-soft">
-                      Tipo de peça
+                      Produto
                     </p>
 
                     <p className="mt-1 text-sm font-semibold text-caiment-ink">
-                      {String(
-                        clothingObject.userData.garmentType ?? '',
-                      )}
+                      {product.name}
                     </p>
 
                     <p className="mt-2 text-xs text-caiment-ink-soft">
-                      Identificador
+                      Arquivo 3D
                     </p>
 
                     <p className="mt-1 break-all text-xs font-medium text-caiment-ink">
-                      {String(
-                        clothingObject.userData.productId ?? '',
-                      )}
+                      {clothingModelUrl}
                     </p>
                   </div>
                 )}

@@ -4,8 +4,18 @@
 CAIMENT — AvatarViewer
 ============================================================
 
-ÚNICA ALTERAÇÃO:
-- Deslocar a roupa para frente no eixo Z (+Z).
+RESPONSABILIDADES:
+- Carregar e normalizar o avatar Tripo.
+- Carregar roupas 3D importadas (.GLB / .GLTF).
+- Manter compatibilidade com clothingObject.
+- Posicionar as roupas usando landmarks anatômicos.
+- Aplicar escala proporcional à altura corporal.
+- Preservar a geometria e a modelagem original.
+- Não depender de Shape Keys.
+- Não gerar geometria procedural.
+
+ROUPAS:
+public/models/clothes/
 
 ============================================================
 */
@@ -77,10 +87,18 @@ import type {
 
 interface AvatarViewerProps {
   modelUrl?: string | null;
+
+  // Caminho do modelo 3D armazenado em public/models/clothes.
+  // Exemplo: /models/clothes/camiseta-essential.glb
   clothingModelUrl?: string | null;
+
+  // Mantido para compatibilidade com chamadas antigas.
   clothingObject?: Object3D | null;
+
   measurements?: unknown;
+
   className?: string;
+
   showControls?: boolean;
 }
 
@@ -97,15 +115,6 @@ interface AvatarFitData {
   surface: Object3D;
 }
 
-interface HorizontalBounds {
-  width: number;
-  depth: number;
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-}
-
 // ============================================================
 // CONSTANTES
 // ============================================================
@@ -114,7 +123,6 @@ const AVATAR_TARGET_HEIGHT = 3.4;
 
 const AVATAR_ROTATION_Y = -Math.PI / 2;
 
-// Deslocamento da roupa para frente.
 // Frente do avatar = +Z.
 const CLOTHING_FORWARD_OFFSET = 0.1;
 
@@ -131,7 +139,7 @@ const CAMERA_TARGET: [number, number, number] = [
 ];
 
 // ============================================================
-// VALIDAÇÃO DE DADOS
+// VALIDAÇÃO
 // ============================================================
 
 function isRecord(
@@ -145,7 +153,7 @@ function isRecord(
 }
 
 // ============================================================
-// EXTRAÇÃO DOS REGISTROS DE MEDIDAS CORPORAIS
+// MEDIDAS CORPORAIS
 // ============================================================
 
 function getMeasurementRecords(
@@ -155,17 +163,13 @@ function getMeasurementRecords(
     return [];
   }
 
-  const records: Record<string, unknown>[] = [
-    measurements,
-  ];
+  const records = [measurements];
 
-  const nestedKeys = [
+  for (const key of [
     'medidas',
     'measurements',
     'dados',
-  ];
-
-  for (const key of nestedKeys) {
+  ]) {
     const nested = measurements[key];
 
     if (isRecord(nested)) {
@@ -204,8 +208,7 @@ function getUserHeightInMeters(
         value = Number(candidate);
       } else if (isRecord(candidate)) {
         value = Number(
-          candidate.valor ??
-          candidate.value,
+          candidate.valor ?? candidate.value,
         );
 
         if (typeof candidate.unidade === 'string') {
@@ -341,6 +344,113 @@ function getLandmark(
 }
 
 // ============================================================
+// IDENTIFICAÇÃO DO TIPO DA ROUPA
+// ============================================================
+
+function normalizeGarmentType(
+  value: string,
+): string {
+  const normalized = value
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s_-]+/g, '');
+
+  if (
+    [
+      'tshirt',
+      'camiseta',
+      'shirt',
+      'regata',
+    ].includes(normalized)
+  ) {
+    return 'tshirt';
+  }
+
+  if (
+    [
+      'short',
+      'shorts',
+    ].includes(normalized)
+  ) {
+    return 'short';
+  }
+
+  if (
+    [
+      'pants',
+      'calca',
+      'trousers',
+    ].includes(normalized)
+  ) {
+    return 'pants';
+  }
+
+  if (
+    [
+      'dress',
+      'vestido',
+    ].includes(normalized)
+  ) {
+    return 'dress';
+  }
+
+  return '';
+}
+
+function getGarmentType(
+  garment: Object3D,
+): string {
+  const candidates = [
+    garment.userData.garmentType,
+    garment.userData.type,
+    garment.userData.category,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') {
+      continue;
+    }
+
+    const type = normalizeGarmentType(candidate);
+
+    if (type) {
+      return type;
+    }
+  }
+
+  return 'tshirt';
+}
+
+function getGarmentTypeFromUrl(
+  url: string,
+): string {
+  const filename = decodeURIComponent(
+    url.split('/').pop() ?? '',
+  );
+
+  const normalized = filename
+    .toLowerCase()
+    .replace(/\.(glb|gltf)$/i, '');
+
+  const patterns: Array<[RegExp, string]> = [
+    [/(^|[-_])(?:short|shorts)([-_]|$)/, 'short'],
+    [/(^|[-_])(?:pants|calca|trousers)([-_]|$)/, 'pants'],
+    [/(^|[-_])(?:dress|vestido)([-_]|$)/, 'dress'],
+    [/(^|[-_])(?:tshirt|camiseta|shirt|regata)([-_]|$)/, 'tshirt'],
+  ];
+
+  for (const [pattern, type] of patterns) {
+    if (pattern.test(normalized)) {
+      return type;
+    }
+  }
+
+  return '';
+}
+
+// ============================================================
 // ESCALA PROPORCIONAL DA ROUPA
 // ============================================================
 
@@ -365,7 +475,7 @@ function applyGarmentScale(
     userHeight <= 0
   ) {
     console.warn(
-      'Altura corporal não encontrada. A escala original da roupa será preservada.',
+      'Altura corporal não encontrada. Escala original da roupa preservada.',
     );
 
     return 1;
@@ -379,7 +489,7 @@ function applyGarmentScale(
     scale <= 0
   ) {
     console.warn(
-      'Fator de escala inválido. A escala original da roupa será preservada.',
+      'Fator de escala inválido. Escala original da roupa preservada.',
     );
 
     return 1;
@@ -397,439 +507,7 @@ function applyGarmentScale(
 }
 
 // ============================================================
-// IDENTIFICAÇÃO DO TIPO DA ROUPA
-// ============================================================
-
-function getGarmentType(
-  garment: Object3D,
-): string {
-  const candidates = [
-    garment.userData.garmentType,
-    garment.userData.type,
-    garment.userData.category,
-  ];
-
-  for (const candidate of candidates) {
-    if (typeof candidate !== 'string') {
-      continue;
-    }
-
-    const normalized = candidate
-      .toLowerCase()
-      .trim()
-      .replace(/[\s_-]+/g, '');
-
-    if (
-      [
-        'tshirt',
-        'camiseta',
-        'shirt',
-        'regata',
-      ].includes(normalized)
-    ) {
-      return 'tshirt';
-    }
-
-    if (
-      [
-        'short',
-        'shorts',
-      ].includes(normalized)
-    ) {
-      return 'short';
-    }
-
-    if (
-      [
-        'pants',
-        'calca',
-        'calças',
-        'trousers',
-      ].includes(normalized)
-    ) {
-      return 'pants';
-    }
-
-    if (
-      [
-        'dress',
-        'vestido',
-      ].includes(normalized)
-    ) {
-      return 'dress';
-    }
-  }
-
-  return 'tshirt';
-}
-
-// ============================================================
-// REFERÊNCIA ANATÔMICA HORIZONTAL
-// ============================================================
-
-function getHorizontalReference(
-  garmentType: string,
-  fitData: AvatarFitData,
-): {
-  anchor: THREE.Vector3;
-  left: THREE.Vector3 | null;
-  right: THREE.Vector3 | null;
-} | null {
-  switch (garmentType) {
-    case 'tshirt': {
-      const anchor = getLandmark(
-        fitData,
-        [
-          'bustCenter',
-          'shoulderCenter',
-          'neckBase',
-        ],
-      );
-
-      if (!anchor) {
-        return null;
-      }
-
-      return {
-        anchor,
-        left: getLandmark(
-          fitData,
-          ['leftShoulder'],
-        ),
-        right: getLandmark(
-          fitData,
-          ['rightShoulder'],
-        ),
-      };
-    }
-
-    case 'short':
-    case 'pants': {
-      const anchor = getLandmark(
-        fitData,
-        [
-          'hipCenter',
-          'waistCenter',
-        ],
-      );
-
-      if (!anchor) {
-        return null;
-      }
-
-      return {
-        anchor,
-        left: getLandmark(
-          fitData,
-          ['leftHip'],
-        ),
-        right: getLandmark(
-          fitData,
-          ['rightHip'],
-        ),
-      };
-    }
-
-    case 'dress': {
-      const anchor = getLandmark(
-        fitData,
-        [
-          'bustCenter',
-          'shoulderCenter',
-          'neckBase',
-        ],
-      );
-
-      if (!anchor) {
-        return null;
-      }
-
-      return {
-        anchor,
-        left: getLandmark(
-          fitData,
-          ['leftShoulder'],
-        ),
-        right: getLandmark(
-          fitData,
-          ['rightShoulder'],
-        ),
-      };
-    }
-
-    default:
-      return null;
-  }
-}
-
-// ============================================================
-// DIMENSÕES DA SUPERFÍCIE DO AVATAR EM UMA ALTURA
-// ============================================================
-
-function getAvatarHorizontalSlice(
-  fitData: AvatarFitData,
-  centerY: number,
-): HorizontalBounds | null {
-  const verticalTolerance = Math.max(
-    0.045,
-    fitData.size.y * 0.018,
-  );
-
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-
-  const vertex = new THREE.Vector3();
-
-  fitData.surface.updateMatrixWorld(true);
-
-  fitData.surface.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-
-    const position = child.geometry.getAttribute(
-      'position',
-    );
-
-    if (!position) {
-      return;
-    }
-
-    const stride = Math.max(
-      1,
-      Math.floor(position.count / 30000),
-    );
-
-    for (
-      let index = 0;
-      index < position.count;
-      index += stride
-    ) {
-      vertex.fromBufferAttribute(
-        position,
-        index,
-      );
-
-      vertex.applyMatrix4(
-        child.matrixWorld,
-      );
-
-      if (
-        Math.abs(vertex.y - centerY) >
-        verticalTolerance
-      ) {
-        continue;
-      }
-
-      minX = Math.min(minX, vertex.x);
-      maxX = Math.max(maxX, vertex.x);
-      minZ = Math.min(minZ, vertex.z);
-      maxZ = Math.max(maxZ, vertex.z);
-    }
-  });
-
-  if (
-    !Number.isFinite(minX) ||
-    !Number.isFinite(maxX) ||
-    !Number.isFinite(minZ) ||
-    !Number.isFinite(maxZ)
-  ) {
-    return null;
-  }
-
-  const width = maxX - minX;
-  const depth = maxZ - minZ;
-
-  if (
-    width <= 0 ||
-    depth <= 0
-  ) {
-    return null;
-  }
-
-  return {
-    width,
-    depth,
-    minX,
-    maxX,
-    minZ,
-    maxZ,
-  };
-}
-
-// ============================================================
-// AJUSTE HORIZONTAL X/Z DA ROUPA
-// ============================================================
-
-function applyGarmentHorizontalFit(
-  garment: Object3D,
-  fitData: AvatarFitData,
-): {
-  scaleX: number;
-  scaleZ: number;
-  targetWidth: number;
-  targetDepth: number;
-} | null {
-  if (
-    garment.userData.avatarHorizontalFitApplied === true
-  ) {
-    return null;
-  }
-
-  const garmentType = getGarmentType(
-    garment,
-  );
-
-  const reference = getHorizontalReference(
-    garmentType,
-    fitData,
-  );
-
-  if (!reference) {
-    console.warn(
-      'Não foi possível calcular o ajuste X/Z: landmark horizontal ausente.',
-      garmentType,
-    );
-
-    return null;
-  }
-
-  garment.updateMatrixWorld(true);
-
-  const originalBox = new THREE.Box3().setFromObject(
-    garment,
-  );
-
-  if (originalBox.isEmpty()) {
-    return null;
-  }
-
-  const originalSize = new THREE.Vector3();
-
-  originalBox.getSize(originalSize);
-
-  if (
-    originalSize.x <= 0 ||
-    originalSize.z <= 0
-  ) {
-    console.warn(
-      'A roupa possui largura ou profundidade inválida.',
-      originalSize.toArray(),
-    );
-
-    return null;
-  }
-
-  let targetWidth: number | null = null;
-
-  if (
-    reference.left &&
-    reference.right
-  ) {
-    targetWidth = Math.abs(
-      reference.right.x - reference.left.x,
-    );
-  }
-
-  const avatarSlice = getAvatarHorizontalSlice(
-    fitData,
-    reference.anchor.y,
-  );
-
-  if (
-    targetWidth === null ||
-    !Number.isFinite(targetWidth) ||
-    targetWidth <= 0
-  ) {
-    targetWidth = avatarSlice?.width ?? null;
-  }
-
-  const targetDepth = avatarSlice?.depth ?? null;
-
-  if (
-    targetWidth === null ||
-    targetDepth === null ||
-    targetWidth <= 0 ||
-    targetDepth <= 0
-  ) {
-    console.warn(
-      'Não foi possível obter as dimensões horizontais do avatar.',
-      {
-        garmentType,
-        targetWidth,
-        targetDepth,
-        avatarSlice,
-      },
-    );
-
-    return null;
-  }
-
-  const scaleX = targetWidth / originalSize.x;
-  const scaleZ = targetDepth / originalSize.z;
-
-  if (
-    !Number.isFinite(scaleX) ||
-    !Number.isFinite(scaleZ) ||
-    scaleX <= 0 ||
-    scaleZ <= 0
-  ) {
-    console.warn(
-      'Fatores de escala horizontal inválidos.',
-      {
-        scaleX,
-        scaleZ,
-      },
-    );
-
-    return null;
-  }
-
-  garment.scale.x *= scaleX;
-  garment.scale.z *= scaleZ;
-
-  garment.userData.avatarHorizontalFitApplied = true;
-
-  garment.userData.horizontalFit = {
-    garmentType,
-    scaleX,
-    scaleZ,
-    targetWidth,
-    targetDepth,
-    originalWidth: originalSize.x,
-    originalDepth: originalSize.z,
-    verticalScalePreserved: true,
-  };
-
-  garment.updateMatrix();
-  garment.updateMatrixWorld(true);
-
-  console.log(
-    'AJUSTE HORIZONTAL DA ROUPA',
-    {
-      garmentType,
-      avatarWidthX: targetWidth,
-      avatarDepthZ: targetDepth,
-      originalGarmentWidthX: originalSize.x,
-      originalGarmentDepthZ: originalSize.z,
-      scaleX,
-      scaleZ,
-      finalScale: garment.scale.toArray(),
-    },
-  );
-
-  return {
-    scaleX,
-    scaleZ,
-    targetWidth,
-    targetDepth,
-  };
-}
-
-// ============================================================
-// POSICIONAMENTO DA ROUPA NO AVATAR
+// POSICIONAMENTO ANATÔMICO
 // ============================================================
 
 function positionGarmentOnAvatar(
@@ -844,7 +522,7 @@ function positionGarmentOnAvatar(
 
   if (garmentBox.isEmpty()) {
     console.warn(
-      'Não foi possível posicionar a roupa: geometria vazia.',
+      'Modelo de roupa sem geometria válida.',
     );
 
     return false;
@@ -859,7 +537,7 @@ function positionGarmentOnAvatar(
     garmentSize.y <= 0
   ) {
     console.warn(
-      'Não foi possível posicionar a roupa: altura inválida.',
+      'Altura inválida do modelo de roupa.',
     );
 
     return false;
@@ -901,34 +579,7 @@ function positionGarmentOnAvatar(
       break;
     }
 
-    case 'short': {
-      verticalAnchor = getLandmark(
-        fitData,
-        [
-          'waistCenter',
-          'hipCenter',
-        ],
-      );
-
-      horizontalAnchor = getLandmark(
-        fitData,
-        [
-          'hipCenter',
-          'waistCenter',
-        ],
-      );
-
-      depthAnchor = getLandmark(
-        fitData,
-        [
-          'hipCenter',
-          'crotchCenter',
-        ],
-      );
-
-      break;
-    }
-
+    case 'short':
     case 'pants': {
       verticalAnchor = getLandmark(
         fitData,
@@ -986,6 +637,11 @@ function positionGarmentOnAvatar(
     }
 
     default:
+      console.warn(
+        'Tipo de roupa não reconhecido:',
+        garmentType,
+      );
+
       return false;
   }
 
@@ -1007,6 +663,12 @@ function positionGarmentOnAvatar(
     return false;
   }
 
+  // O ponto superior da roupa é alinhado
+  // à referência anatômica correspondente.
+  //
+  // A largura, profundidade e altura originais
+  // da geometria não são alteradas aqui.
+
   const targetPosition = new THREE.Vector3(
     horizontalAnchor.x,
     verticalAnchor.y,
@@ -1025,8 +687,7 @@ function positionGarmentOnAvatar(
 
   garment.position.add(translation);
 
-  // ÚNICA ALTERAÇÃO:
-  // desloca a peça para frente no eixo Z positivo.
+  // Frente do avatar = +Z.
   garment.position.z += CLOTHING_FORWARD_OFFSET;
 
   garment.updateMatrix();
@@ -1036,17 +697,14 @@ function positionGarmentOnAvatar(
     garment,
   );
 
+  garment.userData.avatarPositionApplied = true;
+  garment.userData.avatarPositionType = garmentType;
+
   console.log(
     'ROUPA POSICIONADA NO AVATAR',
     {
       garmentType,
       forwardOffset: CLOTHING_FORWARD_OFFSET,
-      targetPosition: [
-        horizontalAnchor.x,
-        verticalAnchor.y,
-        depthAnchor.z,
-      ],
-      translation: translation.toArray(),
       garmentSize: garmentSize.toArray(),
       finalPosition: garment.position.toArray(),
       finalBounds: {
@@ -1056,14 +714,11 @@ function positionGarmentOnAvatar(
     },
   );
 
-  garment.userData.avatarPositionApplied = true;
-  garment.userData.avatarPositionType = garmentType;
-
   return true;
 }
 
 // ============================================================
-// PREPARAÇÃO DOS MATERIAIS
+// PREPARAÇÃO DO MODELO 3D
 // ============================================================
 
 function prepareObjectForRendering(
@@ -1076,7 +731,27 @@ function prepareObjectForRendering(
 
     child.castShadow = false;
     child.receiveShadow = false;
+
+    child.frustumCulled = true;
   });
+
+  object.updateMatrixWorld(true);
+}
+
+// ============================================================
+// CLONAGEM DO MODELO
+// ============================================================
+
+function cloneGarment(
+  original: Object3D,
+): Object3D {
+  const cloned = original.clone(true);
+
+  // Preserva a geometria e os materiais originais.
+  // Nenhum Shape Key é necessário.
+  prepareObjectForRendering(cloned);
+
+  return cloned;
 }
 
 // ============================================================
@@ -1283,79 +958,209 @@ function AvatarModelObject({
 }
 
 // ============================================================
-// ROUPA RECEBIDA DO FITTING ROOM
+// CARREGAMENTO DIRETO DA ROUPA
 // ============================================================
 
 function ClothingModel({
+  clothingModelUrl,
   clothingObject,
   measurements,
   avatarFitData,
 }: {
-  clothingObject: Object3D;
+  clothingModelUrl?: string | null;
+  clothingObject?: Object3D | null;
   measurements?: unknown;
   avatarFitData: AvatarFitData;
 }) {
   const [garment, setGarment] =
     useState<Object3D | null>(null);
 
+  const [loading, setLoading] =
+    useState(false);
+
+  const [error, setError] =
+    useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
 
     setGarment(null);
+    setError(null);
 
-    try {
-      console.log(
-        'OBJETO DE ROUPA RECEBIDO DO FITTING ROOM:',
-        clothingObject,
-      );
+    if (!clothingModelUrl && !clothingObject) {
+      setLoading(false);
+      return;
+    }
 
-      const generated = clothingObject.clone(true);
+    setLoading(true);
 
-      prepareObjectForRendering(generated);
+    const processGarment = (
+      original: Object3D,
+      source: string,
+    ) => {
+      try {
+        if (cancelled) {
+          return;
+        }
 
-      const uniformScale = applyGarmentScale(
-        generated,
-        measurements,
-      );
+        console.log(
+          'MODELO 3D DE ROUPA RECEBIDO:',
+          {
+            source,
+            original,
+          },
+        );
 
-      const horizontalFit = applyGarmentHorizontalFit(
-        generated,
-        avatarFitData,
-      );
+        const generated = cloneGarment(original);
 
-      const positioned = positionGarmentOnAvatar(
-        generated,
-        avatarFitData,
-      );
+        // Identifica o tipo pela metadata ou nome do arquivo.
+        if (
+          !generated.userData.garmentType &&
+          clothingModelUrl
+        ) {
+          const type = getGarmentTypeFromUrl(
+            clothingModelUrl,
+          );
 
-      generated.userData.isDemonstrationGarment = true;
+          if (type) {
+            generated.userData.garmentType = type;
+          }
+        }
 
-      generated.updateMatrixWorld(true);
+        // Escala uniforme para acompanhar a normalização
+        // aplicada ao avatar Tripo.
+        const uniformScale = applyGarmentScale(
+          generated,
+          measurements,
+        );
 
-      if (cancelled) {
-        return;
+        // Não aplicar escala X/Z automática.
+        // Preservar a modelagem original do GLB.
+
+        const positioned = positionGarmentOnAvatar(
+          generated,
+          avatarFitData,
+        );
+
+        generated.userData.isImportedGarment = true;
+
+        generated.updateMatrixWorld(true);
+
+        if (cancelled) {
+          return;
+        }
+
+        setGarment(generated);
+        setLoading(false);
+
+        console.log(
+          'ROUPA IMPORTADA E POSICIONADA:',
+          {
+            source,
+            object: generated,
+            uniformScale,
+            positioned,
+            position: generated.position.toArray(),
+            rotation: generated.rotation.toArray(),
+            scale: generated.scale.toArray(),
+            garmentType: getGarmentType(generated),
+            children: generated.children.length,
+          },
+        );
+      } catch (processingError) {
+        console.error(
+          'Erro ao preparar a roupa:',
+          processingError,
+        );
+
+        if (!cancelled) {
+          setError(
+            processingError instanceof Error
+              ? processingError.message
+              : 'Não foi possível preparar a roupa.',
+          );
+
+          setLoading(false);
+        }
       }
+    };
 
-      setGarment(generated);
+    // Compatibilidade: se o objeto já foi recebido,
+    // utiliza-o sem precisar carregar outro arquivo.
+    if (clothingObject && !clothingModelUrl) {
+      processGarment(
+        clothingObject,
+        'clothingObject',
+      );
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // Carregamento direto do GLB / GLTF.
+    if (clothingModelUrl) {
+      const loader = new GLTFLoader();
 
       console.log(
-        'ROUPA DO FITTING ROOM CARREGADA:',
-        {
-          object: generated,
-          uniformScale,
-          horizontalFit,
-          positioned,
-          position: generated.position.toArray(),
-          rotation: generated.rotation.toArray(),
-          objectScale: generated.scale.toArray(),
-          children: generated.children.length,
-          garmentType: getGarmentType(generated),
-        },
+        'CARREGANDO ROUPA IMPORTADA:',
+        clothingModelUrl,
       );
-    } catch (error) {
-      console.error(
-        'Erro ao carregar ou posicionar a roupa:',
-        error,
+
+      loader.load(
+        clothingModelUrl,
+
+        (gltf) => {
+          if (cancelled) {
+            return;
+          }
+
+          const original = gltf.scene;
+
+          let meshCount = 0;
+
+          original.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              meshCount++;
+            }
+          });
+
+          if (meshCount === 0) {
+            setError(
+              'O arquivo da roupa não contém meshes.',
+            );
+
+            setLoading(false);
+            return;
+          }
+
+          processGarment(
+            original,
+            clothingModelUrl,
+          );
+        },
+
+        undefined,
+
+        (loadError) => {
+          if (cancelled) {
+            return;
+          }
+
+          console.error(
+            'ERRO AO CARREGAR ROUPA 3D:',
+            {
+              url: clothingModelUrl,
+              error: loadError,
+            },
+          );
+
+          setError(
+            `Não foi possível carregar a roupa: ${clothingModelUrl}`,
+          );
+
+          setLoading(false);
+        },
       );
     }
 
@@ -1363,10 +1168,24 @@ function ClothingModel({
       cancelled = true;
     };
   }, [
+    clothingModelUrl,
     clothingObject,
     measurements,
     avatarFitData,
   ]);
+
+  if (loading) {
+    return null;
+  }
+
+  if (error) {
+    console.error(
+      'FALHA NO MODELO DE ROUPA:',
+      error,
+    );
+
+    return null;
+  }
 
   if (!garment) {
     return null;
@@ -1386,12 +1205,14 @@ function ClothingModel({
 
 function Scene({
   modelUrl,
+  clothingModelUrl,
   clothingObject,
   measurements,
   onAvatarLoaded,
   onAvatarError,
 }: {
   modelUrl?: string | null;
+  clothingModelUrl?: string | null;
   clothingObject?: Object3D | null;
   measurements?: unknown;
   onAvatarLoaded: () => void;
@@ -1462,13 +1283,14 @@ function Scene({
           <AvatarPlaceholderModel />
         )}
 
-        {avatarFitData && clothingObject ? (
+        {avatarFitData && (
           <ClothingModel
+            clothingModelUrl={clothingModelUrl}
             clothingObject={clothingObject}
             measurements={measurements}
             avatarFitData={avatarFitData}
           />
-        ) : null}
+        )}
       </Suspense>
     </>
   );
@@ -1500,7 +1322,7 @@ function CameraController() {
 
 export function AvatarViewer({
   modelUrl,
-  clothingModelUrl: _clothingModelUrl,
+  clothingModelUrl,
   clothingObject,
   measurements,
   className,
@@ -1631,6 +1453,7 @@ export function AvatarViewer({
 
             <Scene
               modelUrl={modelUrl}
+              clothingModelUrl={clothingModelUrl}
               clothingObject={clothingObject}
               measurements={measurements}
               onAvatarLoaded={handleAvatarLoaded}

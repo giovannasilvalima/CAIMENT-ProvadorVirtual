@@ -11,6 +11,7 @@
  * - Preservar medidas e seus metadados.
  * - Preservar as medidas de todos os tamanhos disponíveis.
  * - Preservar modelagem, imagens, cores e propriedades do tecido.
+ * - Preservar o caminho do modelo 3D de cada produto.
  * - Entregar dados padronizados aos adaptadores do CAIMENT.
  *
  * Este módulo não gera geometria nem executa simulações.
@@ -96,6 +97,14 @@ export interface StoreCatalogProduct {
   material: Record<string, unknown>;
   model: Record<string, unknown>;
 
+  /**
+   * Caminho ou URL do arquivo 3D da peça.
+   *
+   * Exemplo:
+   * /models/clothes/camiseta-essential.glb
+   */
+  clothingModel?: string;
+
   measurementConvention?: string;
 
   sizes: StoreCatalogSize[];
@@ -141,9 +150,6 @@ export interface StoreProductPayload {
 
   /**
    * Medidas de todos os tamanhos do produto.
-   *
-   * Necessário para preservar o catálogo completo
-   * durante a integração com o CAIMENT.
    */
   sizes?: StoreCatalogSize[];
 
@@ -151,6 +157,14 @@ export interface StoreProductPayload {
 
   material?: Record<string, unknown>;
   model?: Record<string, unknown>;
+
+  /**
+   * Caminho ou URL do modelo 3D da roupa.
+   *
+   * Exemplo:
+   * /models/clothes/camiseta-essential.glb
+   */
+  clothingModel?: string;
 
   measurementConvention?: string;
 
@@ -180,6 +194,11 @@ export interface IntegratedStoreProduct {
 
     price?: number;
     image?: string;
+
+    /**
+     * Caminho ou URL do modelo 3D da roupa.
+     */
+    clothingModel?: string;
   };
 
   selection: {
@@ -187,26 +206,16 @@ export interface IntegratedStoreProduct {
     color: string;
   };
 
-  /**
-   * Medidas do tamanho selecionado.
-   */
   measurements: {
     unit: MeasurementUnit;
     values: StoreMeasurements;
     convention?: string;
   };
 
-  /**
-   * Medidas de todos os tamanhos disponíveis.
-   */
   sizes: StoreCatalogSize[];
 
   material: Record<string, unknown>;
 
-  /**
-   * Preserva geometryProfile, garmentModel,
-   * fit e demais informações da modelagem.
-   */
   model: Record<string, unknown>;
 
   catalogVersion?: string;
@@ -247,12 +256,6 @@ const MEASUREMENT_TYPES: MeasurementType[] = [
   'length',
 ];
 
-/**
- * Campos que representam posições relativas.
- *
- * Diferentemente de comprimentos e circunferências,
- * podem possuir valores negativos ou iguais a zero.
- */
 const RELATIVE_POSITION_FIELDS = new Set<string>([
   'strapPositionFront',
   'strapPositionBack',
@@ -309,23 +312,56 @@ function normalizeOptionalString(
   return value.trim();
 }
 
+/**
+ * Valida o caminho ou URL do modelo 3D.
+ *
+ * Aceita:
+ * - Caminhos locais iniciados por /models/
+ * - URLs HTTP ou HTTPS
+ *
+ * Não exige que o arquivo esteja presente no backend,
+ * pois arquivos locais podem ser servidos pelo frontend.
+ */
+function normalizeClothingModel(
+  value: unknown,
+): string | undefined {
+  const clothingModel = normalizeOptionalString(
+    value,
+    'clothingModel',
+  );
+
+  if (clothingModel === undefined) {
+    return undefined;
+  }
+
+  const isLocalModelPath =
+    clothingModel.startsWith('/models/');
+
+  const isHttpUrl =
+    /^https?:\/\/\S+$/i.test(clothingModel);
+
+  if (
+    !isLocalModelPath &&
+    !isHttpUrl
+  ) {
+    throw new StoreIntegrationError(
+      'O campo "clothingModel" precisa ser um caminho iniciado por /models/ ou uma URL HTTP/HTTPS válida.',
+    );
+  }
+
+  if (/\s/.test(clothingModel)) {
+    throw new StoreIntegrationError(
+      'O caminho do modelo 3D não pode conter espaços.',
+    );
+  }
+
+  return clothingModel;
+}
+
 // ============================================================
 // NORMALIZAÇÃO DE CATEGORIAS
 // ============================================================
 
-/**
- * Identifica o tipo de roupa utilizando:
- *
- * 1. model.garmentModel
- * 2. model.geometryProfile
- * 3. category
- *
- * A categoria final precisa corresponder a um dos
- * quatro geradores universais do CAIMENT.
- *
- * Observação:
- * tshirt representa a regata no contrato atual.
- */
 function normalizeCategory(
   category: string,
   model: Record<string, unknown> = {},
@@ -349,11 +385,8 @@ function normalizeCategory(
   > = {
     'tshirt-basic': 'tshirt',
     'tank-top': 'tshirt',
-
     'shorts-basic': 'short',
-
     'pants-wide-leg': 'pants',
-
     'dress-a-line': 'dress',
   };
 
@@ -421,19 +454,6 @@ function normalizeCategory(
 // NORMALIZAÇÃO DE MEDIDAS
 // ============================================================
 
-/**
- * Valida e normaliza uma medida individual.
- *
- * Preserva:
- * - value
- * - unit
- * - type
- * - landmark
- *
- * Não converte medidas numéricas isoladas em medidas
- * completas, pois isso poderia atribuir um significado
- * incorreto à dimensão recebida.
- */
 function normalizeMeasurement(
   key: string,
   rawMeasurement: unknown,
@@ -502,12 +522,6 @@ function normalizeMeasurement(
   };
 }
 
-/**
- * Normaliza todas as medidas de um tamanho.
- *
- * Não altera nomes de campos, não substitui valores
- * e não calcula dimensões ausentes.
- */
 function normalizeMeasurements(
   measurements: unknown,
 ): StoreMeasurements {
@@ -692,12 +706,6 @@ function normalizeColors(
 // NORMALIZAÇÃO DE TAMANHOS
 // ============================================================
 
-/**
- * Cada tamanho mantém suas próprias medidas.
- *
- * Não existe compartilhamento automático de medidas
- * entre P, M, G, GG ou outros tamanhos.
- */
 function normalizeSizes(
   value: unknown,
 ): StoreCatalogSize[] {
@@ -742,14 +750,6 @@ function normalizeSizes(
 // VALIDAÇÃO DAS MEDIDAS DO PRODUTO
 // ============================================================
 
-/**
- * Confere se as medidas do tamanho selecionado
- * correspondem às medidas do tamanho informado
- * no catálogo completo.
- *
- * Evita que o produto seja recebido com duas versões
- * diferentes das mesmas medidas.
- */
 function validateSelectedSize(
   selectedSize: string,
   selectedMeasurements: StoreMeasurements,
@@ -808,33 +808,6 @@ function validateSelectedSize(
 // RECEBIMENTO DE PRODUTO INDIVIDUAL
 // ============================================================
 
-/**
- * Recebe um produto selecionado na loja.
- *
- * Estrutura esperada:
- *
- * {
- *   id,
- *   sku,
- *   name,
- *   category,
- *   categoryLabel,
- *   price,
- *   image,
- *   size,
- *   color,
- *   measurements,
- *   sizes,
- *   measurementUnit,
- *   material,
- *   model,
- *   measurementConvention,
- *   catalogVersion
- * }
- *
- * As medidas selecionadas e as medidas dos demais
- * tamanhos são mantidas separadamente.
- */
 export function receiveStoreProduct(
   payload: unknown,
   store?: {
@@ -898,6 +871,10 @@ export function receiveStoreProduct(
     'material',
   );
 
+  const clothingModel = normalizeClothingModel(
+    payload.clothingModel,
+  );
+
   const measurementUnit =
     payload.measurementUnit ?? 'cm';
 
@@ -954,6 +931,8 @@ export function receiveStoreProduct(
         payload.image,
         'image',
       ),
+
+      clothingModel,
     },
 
     selection: {
@@ -989,9 +968,6 @@ export function receiveStoreProduct(
 // NORMALIZAÇÃO DE PRODUTO DO CATÁLOGO
 // ============================================================
 
-/**
- * Normaliza um produto dentro de um catálogo completo.
- */
 function normalizeCatalogProduct(
   value: unknown,
 ): StoreCatalogProduct {
@@ -1062,6 +1038,10 @@ function normalizeCatalogProduct(
     material,
     model,
 
+    clothingModel: normalizeClothingModel(
+      value.clothingModel,
+    ),
+
     measurementConvention: normalizeOptionalString(
       value.measurementConvention,
       'measurementConvention',
@@ -1075,20 +1055,6 @@ function normalizeCatalogProduct(
 // RECEBIMENTO DE CATÁLOGO COMPLETO
 // ============================================================
 
-/**
- * Recebe e valida um catálogo completo da loja.
- *
- * Estrutura esperada:
- *
- * {
- *   catalogVersion: "1.2.0",
- *   notice: "...",
- *   products: [...]
- * }
- *
- * Os dados dos produtos são preservados sem gerar
- * dimensões ou substituir medidas.
- */
 export function receiveStoreCatalog(
   payload: unknown,
   store?: {
@@ -1221,9 +1187,6 @@ export function isIntegratedStoreCatalog(
 // UTILITÁRIOS DE ACESSO
 // ============================================================
 
-/**
- * Recupera um produto específico de um catálogo integrado.
- */
 export function getIntegratedCatalogProduct(
   catalog: IntegratedStoreCatalog,
   productId: string,
@@ -1233,9 +1196,6 @@ export function getIntegratedCatalogProduct(
   );
 }
 
-/**
- * Recupera as medidas de um tamanho específico.
- */
 export function getIntegratedProductSize(
   product: StoreCatalogProduct,
   size: string,
@@ -1245,12 +1205,6 @@ export function getIntegratedProductSize(
   );
 }
 
-/**
- * Recupera as medidas de todos os tamanhos.
- *
- * Retorna os dados originais normalizados, sem
- * interpolar ou calcular medidas ausentes.
- */
 export function getIntegratedProductSizes(
   product: StoreCatalogProduct,
 ): StoreCatalogSize[] {
@@ -1260,10 +1214,6 @@ export function getIntegratedProductSizes(
   }));
 }
 
-/**
- * Recupera as medidas do tamanho selecionado
- * em um produto integrado.
- */
 export function getSelectedProductMeasurements(
   product: IntegratedStoreProduct,
 ): StoreMeasurements {
