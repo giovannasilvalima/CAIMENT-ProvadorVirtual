@@ -3,6 +3,11 @@
 
 **Trabalho de Conclusão de Curso (TCC) — 2026**  
 **ETEC de Taboão da Serra | Técnico em Desenvolvimento de Sistemas**
+Ana Julia Sousa Marques
+Christian Lemes Souza
+Emanuelly Aparecida
+Flávio Gabriel
+Giovanna da Silva
 
 ---
 
