@@ -36,7 +36,7 @@ const products: Product[] = [
     category: 'Camisetas',
     price: 129.9,
     image:
-      'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85',
+      'https://cdn.dooca.store/946/products/a-567.jpg?v=1707488629&webp=0',
   },
   {
     id: 2,

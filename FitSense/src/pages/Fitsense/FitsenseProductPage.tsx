@@ -94,7 +94,7 @@ const catalog = productCatalogRaw as ProductCatalog;
 // '1': '/models/clothes/camiseta-essential.glb'
 
 const CLOTHING_MODELS_BY_PRODUCT_ID: Record<string, string> = {
-  '1': '/models/clothes/camiseta-essential.glb',
+  '1': '/models/clothes/camisa-polo-fuenza.glb',
 
   // Adicione os demais produtos usando seus IDs e caminhos reais:
   // '2': '/models/clothes/arquivo-real-short.glb',
@@ -104,12 +104,12 @@ const CLOTHING_MODELS_BY_PRODUCT_ID: Record<string, string> = {
 
 function getClothingModel(product: CatalogProduct): string {
   const clothingModel =
-    product.clothingModel?.trim() ||
-    CLOTHING_MODELS_BY_PRODUCT_ID[String(product.id)]?.trim();
+    CLOTHING_MODELS_BY_PRODUCT_ID[String(product.id)]?.trim() ||
+    product.clothingModel?.trim();
 
   if (!clothingModel) {
     throw new Error(
-      `O produto "${product.name}" (ID ${product.id}) ainda não possui um arquivo GLB cadastrado. Configure o caminho em CLOTHING_MODELS_BY_PRODUCT_ID.`,
+      `O produto "${product.name}" (ID ${product.id}) ainda não possui um arquivo GLB cadastrado.`,
     );
   }
 

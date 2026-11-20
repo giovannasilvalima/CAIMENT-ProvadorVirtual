@@ -13,12 +13,11 @@
       "price": 129.9,
       "description": "Regata de modelagem regular, decote redondo e tecido de algodão para uso cotidiano.",
       "images": {
-        "front": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1200&q=90",
-        "back": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1200&q=90"
+        "front": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRARn3b3kCMQvCKrCyXFlrL9FkHf6rkjJI6mK86lijyag&s=10",
+        "back": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRARn3b3kCMQvCKrCyXFlrL9FkHf6rkjJI6mK86lijyag&s=10"
       },
       "colors": [
-        { "name": "Branco", "hex": "#F5F5F2" },
-        { "name": "Preto", "hex": "#171717" }
+        { "name": "Azul", "hex": "#00008B" }
       ],
       "material": {
         "composition": "100% algodão (referência fictícia)",

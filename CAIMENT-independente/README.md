@@ -60,7 +60,7 @@ const product = {
   price: 89.90,
   image: "https://loja.exemplo/imagens/camiseta.jpg",
   size: "M",
-  color: "Preta",
+  color: "Azul",
   clothingModel: "https://loja.exemplo/modelos/camiseta.glb"
 };
 

@@ -1,5 +1,6 @@
 
 import * as THREE from 'three';
+import { MeshBVH } from 'three-mesh-bvh';
 
 export interface ClothSimulationOptions {
   iterations?: number;
@@ -9,14 +10,8 @@ export interface ClothSimulationOptions {
   substeps?: number;
   enableGravity?: boolean;
   enabled?: boolean;
-
-  /** Distância máxima para reconhecer contato com o avatar, em metros. */
   contactDistance?: number;
-
-  /** Distância mínima entre a roupa e a superfície corporal, em metros. */
   bodyClearance?: number;
-
-  /** Intensidade da correção de contato: 0 a 1. */
   contactStrength?: number;
 }
 
@@ -34,7 +29,7 @@ export interface ClothConstraint {
   particleB: number;
   restLength: number;
   stiffness: number;
-  type?: 'structural' | 'seam';
+  type?: 'structural' | 'seam' | 'bending';
 }
 
 export interface ClothSimulationResult {
@@ -54,20 +49,19 @@ interface WeldGroupData {
   globalIndices: number[];
 }
 
-interface BodyTriangle {
-  triangle: THREE.Triangle;
-  normal: THREE.Vector3;
+interface EdgeData {
+  opposite: number;
 }
 
 const DEFAULT_OPTIONS: Required<ClothSimulationOptions> = {
-  iterations: 8,
+  iterations: 10,
   gravity: 9.81,
-  damping: 0.985,
-  stiffness: 0.9,
-  substeps: 2,
+  damping: 0.99,
+  stiffness: 0.95,
+  substeps: 3,
   enableGravity: true,
   enabled: true,
-  contactDistance: 0.025,
+  contactDistance: 0.05,
   bodyClearance: 0.005,
   contactStrength: 1,
 };
@@ -75,6 +69,7 @@ const DEFAULT_OPTIONS: Required<ClothSimulationOptions> = {
 const MIN_REST_LENGTH = 0.000001;
 const MAX_DELTA_TIME = 1 / 30;
 const MIN_MASS = 0.000001;
+const POSITION_EPSILON = 0.00001;
 
 export class ClothSimulation {
   readonly particles: ClothParticle[] = [];
@@ -92,20 +87,27 @@ export class ClothSimulation {
   private initialPinnedStates: boolean[] = [];
   private initialInverseMasses: number[] = [];
 
-  /** Malha corporal utilizada como superfície de colisão. */
   private bodyMesh: THREE.Mesh | null = null;
-
-  /** Objeto que contém a geometria da roupa. */
   private garmentObject: THREE.Object3D | null = null;
 
-  /** Triângulos corporais convertidos para coordenadas de mundo. */
-  private bodyTriangles: BodyTriangle[] = [];
+  private bodyCollisionGeometry: THREE.BufferGeometry | null = null;
+  private bodyBVH: MeshBVH | null = null;
 
   private readonly worldPosition = new THREE.Vector3();
   private readonly localPosition = new THREE.Vector3();
   private readonly correction = new THREE.Vector3();
   private readonly closestPoint = new THREE.Vector3();
   private readonly bodyNormal = new THREE.Vector3();
+  private readonly contactDelta = new THREE.Vector3();
+  private readonly outwardDirection = new THREE.Vector3();
+
+  private readonly triangleA = new THREE.Vector3();
+  private readonly triangleB = new THREE.Vector3();
+  private readonly triangleC = new THREE.Vector3();
+  private readonly temporaryTriangle = new THREE.Triangle();
+
+  private readonly bodyBounds = new THREE.Box3();
+  private readonly inverseGarmentMatrix = new THREE.Matrix4();
 
   constructor(options: ClothSimulationOptions = {}) {
     this.options = {
@@ -115,10 +117,28 @@ export class ClothSimulation {
 
     this.validateOptions();
 
-    this.options.iterations = Math.max(1, Math.floor(this.options.iterations));
-    this.options.substeps = Math.max(1, Math.floor(this.options.substeps));
-    this.options.damping = THREE.MathUtils.clamp(this.options.damping, 0, 1);
-    this.options.stiffness = THREE.MathUtils.clamp(this.options.stiffness, 0, 1);
+    this.options.iterations = Math.max(
+      1,
+      Math.floor(this.options.iterations),
+    );
+
+    this.options.substeps = Math.max(
+      1,
+      Math.floor(this.options.substeps),
+    );
+
+    this.options.damping = THREE.MathUtils.clamp(
+      this.options.damping,
+      0,
+      1,
+    );
+
+    this.options.stiffness = THREE.MathUtils.clamp(
+      this.options.stiffness,
+      0,
+      1,
+    );
+
     this.options.contactStrength = THREE.MathUtils.clamp(
       this.options.contactStrength,
       0,
@@ -127,7 +147,9 @@ export class ClothSimulation {
 
     this.gravity = new THREE.Vector3(
       0,
-      this.options.enableGravity ? -this.options.gravity : 0,
+      this.options.enableGravity
+        ? -this.options.gravity
+        : 0,
       0,
     );
   }
@@ -147,7 +169,10 @@ export class ClothSimulation {
     for (const name of numericOptions) {
       const value = this.options[name];
 
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
+      if (
+        typeof value !== 'number' ||
+        !Number.isFinite(value)
+      ) {
         throw new Error(
           `ClothSimulation: opção "${name}" deve ser um número finito.`,
         );
@@ -163,7 +188,9 @@ export class ClothSimulation {
       this.options.contactStrength < 0 ||
       this.options.contactStrength > 1
     ) {
-      throw new Error('ClothSimulation: opções físicas inválidas.');
+      throw new Error(
+        'ClothSimulation: opções físicas inválidas.',
+      );
     }
 
     if (
@@ -176,13 +203,6 @@ export class ClothSimulation {
     }
   }
 
-  /**
-   * Registra a superfície corporal usada para detectar contato.
-   *
-   * garmentObject deve ser o objeto que contém a geometria simulada.
-   * Se omitido, as partículas são consideradas em coordenadas locais
-   * equivalentes às coordenadas de mundo.
-   */
   setBodySurface(
     bodyMesh: THREE.Mesh,
     garmentObject?: THREE.Object3D,
@@ -205,18 +225,12 @@ export class ClothSimulation {
     this.rebuildBodySurface();
   }
 
-  /** Remove a referência corporal sem alterar a geometria da roupa. */
   clearBodySurface(): void {
     this.bodyMesh = null;
     this.garmentObject = null;
-    this.bodyTriangles = [];
+    this.disposeBodyAcceleration();
   }
 
-  /**
-   * Atualiza os triângulos corporais em coordenadas de mundo.
-   * Deve ser chamado novamente se o avatar mudar de posição,
-   * escala, rotação ou deformação.
-   */
   refreshBodySurface(): void {
     if (this.bodyMesh) {
       this.rebuildBodySurface();
@@ -228,9 +242,9 @@ export class ClothSimulation {
 
     this.bodyMesh.updateWorldMatrix(true, false);
 
-    const geometry = this.bodyMesh.geometry;
-    const position = geometry.getAttribute('position');
-    const index = geometry.getIndex();
+    const sourceGeometry = this.bodyMesh.geometry;
+    const position = sourceGeometry.getAttribute('position');
+    const index = sourceGeometry.getIndex();
 
     if (!position || position.itemSize !== 3) {
       throw new Error(
@@ -240,53 +254,61 @@ export class ClothSimulation {
 
     const elementCount = index ? index.count : position.count;
 
-    if (elementCount % 3 !== 0) {
+    if (elementCount < 3 || elementCount % 3 !== 0) {
       throw new Error(
         'ClothSimulation: geometria corporal sem triângulos válidos.',
       );
     }
 
-    const triangles: BodyTriangle[] = [];
-    const a = new THREE.Vector3();
-    const b = new THREE.Vector3();
-    const c = new THREE.Vector3();
-    const normal = new THREE.Vector3();
+    this.disposeBodyAcceleration();
 
-    for (let i = 0; i < elementCount; i += 3) {
-      const ia = index ? index.getX(i) : i;
-      const ib = index ? index.getX(i + 1) : i + 1;
-      const ic = index ? index.getX(i + 2) : i + 2;
+    const collisionGeometry = sourceGeometry.clone();
 
-      a.fromBufferAttribute(position, ia).applyMatrix4(
-        this.bodyMesh.matrixWorld,
+    collisionGeometry.applyMatrix4(this.bodyMesh.matrixWorld);
+
+    const collisionPosition =
+      collisionGeometry.getAttribute('position');
+
+    if (!collisionPosition || collisionPosition.count < 3) {
+      collisionGeometry.dispose();
+
+      throw new Error(
+        'ClothSimulation: não foi possível preparar a geometria de colisão.',
       );
-      b.fromBufferAttribute(position, ib).applyMatrix4(
-        this.bodyMesh.matrixWorld,
-      );
-      c.fromBufferAttribute(position, ic).applyMatrix4(
-        this.bodyMesh.matrixWorld,
-      );
-
-      const triangle = new THREE.Triangle(a.clone(), b.clone(), c.clone());
-
-      triangle.getNormal(normal);
-
-      if (
-        !Number.isFinite(normal.x) ||
-        !Number.isFinite(normal.y) ||
-        !Number.isFinite(normal.z) ||
-        normal.lengthSq() < 1e-12
-      ) {
-        continue;
-      }
-
-      triangles.push({
-        triangle,
-        normal: normal.clone().normalize(),
-      });
     }
 
-    this.bodyTriangles = triangles;
+    try {
+      this.bodyBVH = new MeshBVH(collisionGeometry);
+      this.bodyCollisionGeometry = collisionGeometry;
+
+      this.bodyBounds.makeEmpty();
+
+      for (let i = 0; i < collisionPosition.count; i++) {
+        this.triangleA.fromBufferAttribute(
+          collisionPosition,
+          i,
+        );
+
+        this.bodyBounds.expandByPoint(this.triangleA);
+      }
+    } catch (error) {
+      collisionGeometry.dispose();
+
+      throw new Error(
+        `ClothSimulation: falha ao construir BVH do avatar: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private disposeBodyAcceleration(): void {
+    this.bodyBVH = null;
+
+    if (this.bodyCollisionGeometry) {
+      this.bodyCollisionGeometry.dispose();
+      this.bodyCollisionGeometry = null;
+    }
   }
 
   private getVertexMass(
@@ -297,7 +319,10 @@ export class ClothSimulation {
 
     if (massAttribute && index < massAttribute.count) {
       const mass = massAttribute.getX(index);
-      if (Number.isFinite(mass) && mass > 0) return mass;
+
+      if (Number.isFinite(mass) && mass > 0) {
+        return mass;
+      }
     }
 
     const vertexMasses = geometry.userData.vertexMasses as
@@ -307,7 +332,10 @@ export class ClothSimulation {
 
     if (vertexMasses && index < vertexMasses.length) {
       const mass = vertexMasses[index];
-      if (Number.isFinite(mass) && mass > 0) return mass;
+
+      if (Number.isFinite(mass) && mass > 0) {
+        return mass;
+      }
     }
 
     const masses = geometry.userData.masses as
@@ -317,7 +345,10 @@ export class ClothSimulation {
 
     if (masses && index < masses.length) {
       const mass = masses[index];
-      if (Number.isFinite(mass) && mass > 0) return mass;
+
+      if (Number.isFinite(mass) && mass > 0) {
+        return mass;
+      }
     }
 
     return 1;
@@ -328,12 +359,18 @@ export class ClothSimulation {
     pinnedVertices: number[] = [],
   ): void {
     if (!geometry) {
-      throw new Error('ClothSimulation: geometria não informada.');
+      throw new Error(
+        'ClothSimulation: geometria não informada.',
+      );
     }
 
     const position = geometry.getAttribute('position');
 
-    if (!position || position.itemSize !== 3 || position.count < 3) {
+    if (
+      !position ||
+      position.itemSize !== 3 ||
+      position.count < 3
+    ) {
       throw new Error(
         'ClothSimulation: geometria sem atributo position válido.',
       );
@@ -358,10 +395,13 @@ export class ClothSimulation {
 
     this.particles.length = 0;
     this.constraints.length = 0;
+
     this.initialPinnedStates = [];
     this.initialInverseMasses = [];
 
-    this.initialPositions = new Float32Array(position.count * 3);
+    this.initialPositions = new Float32Array(
+      position.count * 3,
+    );
 
     const pinnedSet = new Set(pinnedVertices);
 
@@ -377,6 +417,7 @@ export class ClothSimulation {
       }
 
       const offset = i * 3;
+
       this.initialPositions[offset] = x;
       this.initialPositions[offset + 1] = y;
       this.initialPositions[offset + 2] = z;
@@ -384,6 +425,7 @@ export class ClothSimulation {
       const mass = this.getVertexMass(geometry, i);
       const restInverseMass = 1 / Math.max(mass, MIN_MASS);
       const pinned = pinnedSet.has(i);
+
       const initialPosition = new THREE.Vector3(x, y, z);
 
       this.particles.push({
@@ -412,7 +454,7 @@ export class ClothSimulation {
     b: number,
     restLength: number,
     stiffness: number,
-    type: 'structural' | 'seam',
+    type: 'structural' | 'seam' | 'bending',
     existingEdges: Set<string>,
   ): void {
     if (
@@ -440,6 +482,7 @@ export class ClothSimulation {
     const key = `${min}:${max}`;
 
     if (existingEdges.has(key)) return;
+
     existingEdges.add(key);
 
     this.constraints.push({
@@ -451,9 +494,126 @@ export class ClothSimulation {
     });
   }
 
-  private createConstraints(geometry: THREE.BufferGeometry): void {
+  private getGeometricEdgeKey(
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+  ): string {
+    const quantize = (value: number) =>
+      Math.round(value / POSITION_EPSILON);
+
+    const pointA = [
+      quantize(a.x),
+      quantize(a.y),
+      quantize(a.z),
+    ].join(',');
+
+    const pointB = [
+      quantize(b.x),
+      quantize(b.y),
+      quantize(b.z),
+    ].join(',');
+
+    return pointA < pointB
+      ? `${pointA}|${pointB}`
+      : `${pointB}|${pointA}`;
+  }
+
+  private createBendingConstraints(
+    geometry: THREE.BufferGeometry,
+    existingEdges: Set<string>,
+  ): void {
     const position = geometry.getAttribute('position');
     const index = geometry.getIndex();
+
+    const edgeMap = new Map<string, EdgeData[]>();
+    const elementCount = index ? index.count : position.count;
+
+    for (let i = 0; i < elementCount; i += 3) {
+      const ids = [
+        index ? index.getX(i) : i,
+        index ? index.getX(i + 1) : i + 1,
+        index ? index.getX(i + 2) : i + 2,
+      ];
+
+      const [a, b, c] = ids;
+
+      if (
+        ids.some(
+          (id) =>
+            !Number.isInteger(id) ||
+            id < 0 ||
+            id >= position.count,
+        )
+      ) {
+        continue;
+      }
+
+      const edges: Array<[number, number, number]> = [
+        [a, b, c],
+        [b, c, a],
+        [c, a, b],
+      ];
+
+      for (const [edgeA, edgeB, opposite] of edges) {
+        this.triangleA.fromBufferAttribute(position, edgeA);
+        this.triangleB.fromBufferAttribute(position, edgeB);
+
+        const key = this.getGeometricEdgeKey(
+          this.triangleA,
+          this.triangleB,
+        );
+
+        const entries = edgeMap.get(key) ?? [];
+
+        entries.push({ opposite });
+        edgeMap.set(key, entries);
+      }
+    }
+
+    const bendingStiffness = THREE.MathUtils.clamp(
+      this.options.stiffness * 0.35,
+      0.15,
+      0.65,
+    );
+
+    for (const entries of edgeMap.values()) {
+      if (entries.length !== 2) continue;
+
+      const first = entries[0];
+      const second = entries[1];
+
+      if (first.opposite === second.opposite) continue;
+
+      const restLength = this.particles[
+        first.opposite
+      ].position.distanceTo(
+        this.particles[second.opposite].position,
+      );
+
+      if (
+        !Number.isFinite(restLength) ||
+        restLength <= MIN_REST_LENGTH
+      ) {
+        continue;
+      }
+
+      this.addConstraint(
+        first.opposite,
+        second.opposite,
+        restLength,
+        bendingStiffness,
+        'bending',
+        existingEdges,
+      );
+    }
+  }
+
+  private createConstraints(
+    geometry: THREE.BufferGeometry,
+  ): void {
+    const position = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+
     const existingEdges = new Set<string>();
     const elementCount = index ? index.count : position.count;
 
@@ -485,8 +645,11 @@ export class ClothSimulation {
       this.addStructuralConstraint(c, a, existingEdges);
     }
 
-    const weldConstraints = geometry.userData
-      .weldConstraints as WeldConstraintData[] | undefined;
+    this.createBendingConstraints(geometry, existingEdges);
+
+    const weldConstraints = geometry.userData.weldConstraints as
+      | WeldConstraintData[]
+      | undefined;
 
     if (Array.isArray(weldConstraints)) {
       for (const weld of weldConstraints) {
@@ -516,21 +679,30 @@ export class ClothSimulation {
       }
     }
 
-    if (!Array.isArray(weldConstraints) || weldConstraints.length === 0) {
+    if (
+      !Array.isArray(weldConstraints) ||
+      weldConstraints.length === 0
+    ) {
       const weldGroups = geometry.userData.weldGroups as
         | WeldGroupData[]
         | undefined;
 
       if (Array.isArray(weldGroups)) {
         for (const group of weldGroups) {
-          if (!Array.isArray(group.globalIndices) ||
-              group.globalIndices.length < 2) {
+          if (
+            !Array.isArray(group.globalIndices) ||
+            group.globalIndices.length < 2
+          ) {
             continue;
           }
 
           const first = group.globalIndices[0];
 
-          for (let i = 1; i < group.globalIndices.length; i++) {
+          for (
+            let i = 1;
+            i < group.globalIndices.length;
+            i++
+          ) {
             this.addConstraint(
               first,
               group.globalIndices[i],
@@ -566,7 +738,10 @@ export class ClothSimulation {
       this.particles[b].position,
     );
 
-    if (!Number.isFinite(restLength) || restLength <= MIN_REST_LENGTH) {
+    if (
+      !Number.isFinite(restLength) ||
+      restLength <= MIN_REST_LENGTH
+    ) {
       return;
     }
 
@@ -582,6 +757,7 @@ export class ClothSimulation {
 
   pinParticle(index: number): void {
     const particle = this.particles[index];
+
     if (!particle) return;
 
     particle.pinned = true;
@@ -592,6 +768,7 @@ export class ClothSimulation {
 
   unpinParticle(index: number): void {
     const particle = this.particles[index];
+
     if (!particle) return;
 
     particle.pinned = false;
@@ -600,14 +777,19 @@ export class ClothSimulation {
     particle.acceleration.set(0, 0, 0);
   }
 
-  movePinnedParticle(index: number, position: THREE.Vector3): void {
+  movePinnedParticle(
+    index: number,
+    position: THREE.Vector3,
+  ): void {
     const particle = this.particles[index];
 
     if (
       !particle ||
       !particle.pinned ||
       !position ||
-      ![position.x, position.y, position.z].every(Number.isFinite)
+      ![position.x, position.y, position.z].every(
+        Number.isFinite,
+      )
     ) {
       return;
     }
@@ -617,7 +799,10 @@ export class ClothSimulation {
     particle.acceleration.set(0, 0, 0);
   }
 
-  applyForce(index: number, force: THREE.Vector3): void {
+  applyForce(
+    index: number,
+    force: THREE.Vector3,
+  ): void {
     const particle = this.particles[index];
 
     if (
@@ -629,7 +814,10 @@ export class ClothSimulation {
       return;
     }
 
-    particle.acceleration.addScaledVector(force, particle.inverseMass);
+    particle.acceleration.addScaledVector(
+      force,
+      particle.inverseMass,
+    );
   }
 
   private integrate(deltaTime: number): void {
@@ -639,7 +827,10 @@ export class ClothSimulation {
       if (particle.pinned) continue;
 
       this.temporaryVector
-        .subVectors(particle.position, particle.previousPosition)
+        .subVectors(
+          particle.position,
+          particle.previousPosition,
+        )
         .multiplyScalar(this.options.damping);
 
       this.previousPosition.copy(particle.position);
@@ -673,7 +864,10 @@ export class ClothSimulation {
 
       const distance = this.constraintDelta.length();
 
-      if (!Number.isFinite(distance) || distance <= MIN_REST_LENGTH) {
+      if (
+        !Number.isFinite(distance) ||
+        distance <= MIN_REST_LENGTH
+      ) {
         continue;
       }
 
@@ -701,30 +895,106 @@ export class ClothSimulation {
   }
 
   /**
-   * Encontra a superfície mais próxima e corrige apenas partículas
-   * dentro da distância de contato.
-   *
-   * Partículas afastadas da superfície não são atraídas para o avatar:
-   * sua folga e seu volume permanecem preservados.
+   * Orienta a normal do triângulo para fora do volume aproximado
+   * do avatar. A orientação original dos triângulos não é confiável
+   * em todos os modelos GLB/GLTF.
    */
-  private solveSurfaceContact(): void {
-    if (!this.bodyMesh || this.bodyTriangles.length === 0) return;
-
-    if (this.garmentObject) {
-      this.garmentObject.updateWorldMatrix(true, false);
+  private orientBodyNormal(
+    normal: THREE.Vector3,
+    surfacePoint: THREE.Vector3,
+    particlePosition: THREE.Vector3,
+    signedDistance: number,
+  ): boolean {
+    if (
+      !Number.isFinite(normal.x) ||
+      !Number.isFinite(normal.y) ||
+      !Number.isFinite(normal.z) ||
+      normal.lengthSq() < 1e-12
+    ) {
+      return false;
     }
 
-    const garmentMatrix = this.garmentObject?.matrixWorld;
-    const inverseGarmentMatrix = garmentMatrix
-      ? new THREE.Matrix4().copy(garmentMatrix).invert()
-      : null;
+    normal.normalize();
+
+    // Quando a partícula está fora do corpo, a direção entre
+    // a superfície e a partícula é a referência mais confiável.
+    if (signedDistance > POSITION_EPSILON) {
+      this.outwardDirection
+        .subVectors(particlePosition, surfacePoint);
+
+      if (this.outwardDirection.lengthSq() > 1e-12) {
+        this.outwardDirection.normalize();
+
+        if (normal.dot(this.outwardDirection) < 0) {
+          normal.negate();
+        }
+
+        return true;
+      }
+    }
+
+    // Quando a partícula já está dentro da superfície, sua
+    // direção não pode determinar o lado externo. Usamos o
+    // centro do volume do avatar como referência aproximada.
+    this.outwardDirection
+      .subVectors(surfacePoint, this.bodyBounds.getCenter(this.temporaryVector));
+
+    if (this.outwardDirection.lengthSq() > 1e-12) {
+      this.outwardDirection.normalize();
+
+      if (normal.dot(this.outwardDirection) < 0) {
+        normal.negate();
+      }
+
+      return true;
+    }
+
+    return true;
+  }
+
+  /**
+   * Corrige partículas próximas ou penetrando o avatar.
+   *
+   * A consulta BVH é feita em coordenadas mundiais.
+   * As posições da roupa continuam em coordenadas locais.
+   *
+   * A consulta sem limite de distância permite encontrar também
+   * partículas que já atravessaram a superfície corporal.
+   */
+  private solveSurfaceContact(): void {
+    if (!this.bodyBVH || !this.bodyCollisionGeometry) {
+      return;
+    }
 
     const contactDistance = this.options.contactDistance;
     const clearance = this.options.bodyClearance;
     const strength = this.options.contactStrength;
 
+    if (strength <= 0) {
+      return;
+    }
+
+    let garmentMatrix: THREE.Matrix4 | null = null;
+
+    if (this.garmentObject) {
+      this.garmentObject.updateWorldMatrix(true, false);
+
+      garmentMatrix = this.garmentObject.matrixWorld;
+
+      this.inverseGarmentMatrix
+        .copy(garmentMatrix)
+        .invert();
+    }
+
+    const bodyPosition =
+      this.bodyCollisionGeometry.getAttribute('position');
+
+    const bodyIndex = this.bodyCollisionGeometry.getIndex();
+
     for (const particle of this.particles) {
-      if (particle.pinned || particle.inverseMass <= 0) continue;
+      if (particle.pinned || particle.inverseMass <= 0) {
+        continue;
+      }
 
       this.worldPosition.copy(particle.position);
 
@@ -732,57 +1002,130 @@ export class ClothSimulation {
         this.worldPosition.applyMatrix4(garmentMatrix);
       }
 
-      let nearestDistanceSquared = Infinity;
-      let nearestTriangle: BodyTriangle | null = null;
+      // Não limitar a busca a contactDistance:
+      // isso permite detectar penetrações mais profundas.
+      const result = this.bodyBVH.closestPointToPoint(
+        this.worldPosition,
+        undefined,
+        0,
+        Infinity,
+      );
 
-      for (const bodyTriangle of this.bodyTriangles) {
-        bodyTriangle.triangle.closestPointToPoint(
-          this.worldPosition,
-          this.closestPoint,
-        );
-
-        const distanceSquared = this.worldPosition.distanceToSquared(
-          this.closestPoint,
-        );
-
-        if (distanceSquared < nearestDistanceSquared) {
-          nearestDistanceSquared = distanceSquared;
-          nearestTriangle = bodyTriangle;
-        }
+      if (!result || !Number.isFinite(result.distance)) {
+        continue;
       }
 
-      if (!nearestTriangle) continue;
+      this.closestPoint.copy(result.point);
 
-      const distance = Math.sqrt(nearestDistanceSquared);
+      const faceOffset = result.faceIndex * 3;
 
-      // Fora da zona de contato: não modificar a partícula.
-      if (distance > contactDistance) continue;
+      const ia = bodyIndex
+        ? bodyIndex.getX(faceOffset)
+        : faceOffset;
 
-      this.bodyNormal.copy(nearestTriangle.normal);
+      const ib = bodyIndex
+        ? bodyIndex.getX(faceOffset + 1)
+        : faceOffset + 1;
 
-      const signedDistance = this.worldPosition
-        .clone()
-        .sub(this.closestPoint)
-        .dot(this.bodyNormal);
+      const ic = bodyIndex
+        ? bodyIndex.getX(faceOffset + 2)
+        : faceOffset + 2;
 
-      // Só corrige quando a superfície está penetrando ou
-      // quando a partícula está dentro da folga mínima configurada.
-      if (signedDistance >= clearance) continue;
+      if (
+        ia < 0 ||
+        ib < 0 ||
+        ic < 0 ||
+        ia >= bodyPosition.count ||
+        ib >= bodyPosition.count ||
+        ic >= bodyPosition.count
+      ) {
+        continue;
+      }
 
-      // Suaviza a correção na borda da zona de contato.
-      const normalizedDistance = contactDistance > 0
-        ? THREE.MathUtils.clamp(distance / contactDistance, 0, 1)
-        : 0;
+      this.triangleA.fromBufferAttribute(bodyPosition, ia);
+      this.triangleB.fromBufferAttribute(bodyPosition, ib);
+      this.triangleC.fromBufferAttribute(bodyPosition, ic);
 
-      const fade = 1 - normalizedDistance;
-      const smoothFade = fade * fade * (3 - 2 * fade);
+      this.temporaryTriangle.set(
+        this.triangleA,
+        this.triangleB,
+        this.triangleC,
+      );
 
-      const correctionAmount =
-        (clearance - signedDistance) *
-        strength *
-        smoothFade;
+      this.temporaryTriangle.getNormal(this.bodyNormal);
 
-      if (correctionAmount <= 0) continue;
+      if (
+        !Number.isFinite(this.bodyNormal.x) ||
+        !Number.isFinite(this.bodyNormal.y) ||
+        !Number.isFinite(this.bodyNormal.z) ||
+        this.bodyNormal.lengthSq() < 1e-12
+      ) {
+        continue;
+      }
+
+      this.contactDelta.subVectors(
+        this.worldPosition,
+        this.closestPoint,
+      );
+
+      const rawSignedDistance = this.contactDelta.dot(
+        this.bodyNormal,
+      );
+
+      if (
+        !this.orientBodyNormal(
+          this.bodyNormal,
+          this.closestPoint,
+          this.worldPosition,
+          rawSignedDistance,
+        )
+      ) {
+        continue;
+      }
+
+      const signedDistance = this.contactDelta.dot(
+        this.bodyNormal,
+      );
+
+      if (!Number.isFinite(signedDistance)) {
+        continue;
+      }
+
+      // Partículas externas muito distantes não precisam
+      // participar da correção.
+      if (
+        signedDistance >= clearance &&
+        result.distance > contactDistance
+      ) {
+        continue;
+      }
+
+      if (signedDistance >= clearance) {
+        continue;
+      }
+
+      const requiredCorrection =
+        (clearance - signedDistance) * strength;
+
+      if (
+        !Number.isFinite(requiredCorrection) ||
+        requiredCorrection <= 0
+      ) {
+        continue;
+      }
+
+      // Limita o deslocamento por iteração para evitar saltos
+      // bruscos quando uma partícula está muito penetrada.
+      const maxCorrection = Math.max(
+        contactDistance,
+        clearance,
+        0.01,
+      );
+
+      const correctionAmount = Math.min(
+        requiredCorrection,
+        maxCorrection,
+      );
 
       this.correction
         .copy(this.bodyNormal)
@@ -790,26 +1133,27 @@ export class ClothSimulation {
 
       this.worldPosition.add(this.correction);
 
-      if (inverseGarmentMatrix) {
+      if (garmentMatrix) {
         this.localPosition
           .copy(this.worldPosition)
-          .applyMatrix4(inverseGarmentMatrix);
+          .applyMatrix4(this.inverseGarmentMatrix);
       } else {
         this.localPosition.copy(this.worldPosition);
       }
 
-      const localCorrection = this.localPosition
-        .sub(particle.position);
+      const localCorrection = this.localPosition.sub(
+        particle.position,
+      );
 
       particle.position.add(localCorrection);
-
-      // Evita que a correção seja interpretada como velocidade.
       particle.previousPosition.add(localCorrection);
     }
   }
 
   private updateGeometry(): void {
-    if (!this.positionAttribute || !this.geometry) return;
+    if (!this.positionAttribute || !this.geometry) {
+      return;
+    }
 
     for (let i = 0; i < this.particles.length; i++) {
       const particle = this.particles[i];
@@ -823,20 +1167,32 @@ export class ClothSimulation {
     }
 
     this.positionAttribute.needsUpdate = true;
+
     this.geometry.computeVertexNormals();
     this.geometry.computeBoundingBox();
     this.geometry.computeBoundingSphere();
   }
 
   step(deltaTime: number): void {
-    if (!this.options.enabled || this.particles.length === 0) return;
+    if (
+      !this.options.enabled ||
+      this.particles.length === 0
+    ) {
+      return;
+    }
 
-    if (!Number.isFinite(deltaTime) || deltaTime <= 0) return;
+    if (!Number.isFinite(deltaTime) || deltaTime <= 0) {
+      return;
+    }
 
     const safeDelta = Math.min(deltaTime, MAX_DELTA_TIME);
     const substepDelta = safeDelta / this.options.substeps;
 
-    for (let substep = 0; substep < this.options.substeps; substep++) {
+    for (
+      let substep = 0;
+      substep < this.options.substeps;
+      substep++
+    ) {
       for (const particle of this.particles) {
         if (!particle.pinned) {
           particle.acceleration.add(this.gravity);
@@ -851,8 +1207,6 @@ export class ClothSimulation {
         iteration++
       ) {
         this.solveConstraints();
-
-        // A colisão é resolvida após as restrições em cada iteração.
         this.solveSurfaceContact();
       }
     }
@@ -882,10 +1236,14 @@ export class ClothSimulation {
       particle.previousPosition.copy(particle.position);
       particle.acceleration.set(0, 0, 0);
 
-      const initiallyPinned = this.initialPinnedStates[i] ?? false;
+      const initiallyPinned =
+        this.initialPinnedStates[i] ?? false;
 
       particle.pinned = initiallyPinned;
-      particle.restInverseMass = this.initialInverseMasses[i] ?? 1;
+
+      particle.restInverseMass =
+        this.initialInverseMasses[i] ?? 1;
+
       particle.inverseMass = initiallyPinned
         ? 0
         : particle.restInverseMass;
@@ -895,7 +1253,9 @@ export class ClothSimulation {
   }
 
   getPositions(): Float32Array {
-    const result = new Float32Array(this.particles.length * 3);
+    const result = new Float32Array(
+      this.particles.length * 3,
+    );
 
     for (let i = 0; i < this.particles.length; i++) {
       const position = this.particles[i].position;
@@ -935,7 +1295,8 @@ export class ClothSimulation {
     this.initialPinnedStates = [];
     this.initialInverseMasses = [];
 
-    this.bodyTriangles = [];
+    this.disposeBodyAcceleration();
+
     this.bodyMesh = null;
     this.garmentObject = null;
 

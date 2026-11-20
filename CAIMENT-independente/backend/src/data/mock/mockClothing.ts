@@ -16,7 +16,7 @@ export const mockClothing: Clothing[] = [
     brand: 'Estilo Urbano Streetwear',
     category: 'camisetas',
     price: 149.9,
-    imageUrl: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=600&q=80',
+    imageUrl: 'https://cdn.dooca.store/946/products/a-567.jpg?v=1707488629&webp=0',
     colors: ['#1F1B24', '#E5522C', '#3C6E4F', '#C6F24E', '#2F3A8F'],
     sizes: ['P', 'M', 'G', 'GG'],
     clothingModelUrl: null,
