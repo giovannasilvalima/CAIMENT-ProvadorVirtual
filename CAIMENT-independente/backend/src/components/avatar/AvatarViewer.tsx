@@ -8,11 +8,12 @@ RESPONSABILIDADES:
 - Carregar e normalizar o avatar Tripo.
 - Carregar roupas 3D importadas (.GLB / .GLTF).
 - Manter compatibilidade com clothingObject.
-- Posicionar as roupas usando landmarks anatômicos.
+- Posicionar roupas usando landmarks anatômicos.
 - Aplicar escala proporcional à altura corporal.
-- Preservar a geometria e a modelagem original.
+- Preservar a geometria original das roupas.
+- Não executar simulação de colisão nesta versão.
 - Não depender de Shape Keys.
-- Não gerar geometria procedural.
+- Não gerar roupas proceduralmente.
 
 ROUPAS:
 public/models/clothes/
@@ -87,18 +88,10 @@ import type {
 
 interface AvatarViewerProps {
   modelUrl?: string | null;
-
-  // Caminho do modelo 3D armazenado em public/models/clothes.
-  // Exemplo: /models/clothes/camiseta-essential.glb
   clothingModelUrl?: string | null;
-
-  // Mantido para compatibilidade com chamadas antigas.
   clothingObject?: Object3D | null;
-
   measurements?: unknown;
-
   className?: string;
-
   showControls?: boolean;
 }
 
@@ -663,12 +656,6 @@ function positionGarmentOnAvatar(
     return false;
   }
 
-  // O ponto superior da roupa é alinhado
-  // à referência anatômica correspondente.
-  //
-  // A largura, profundidade e altura originais
-  // da geometria não são alteradas aqui.
-
   const targetPosition = new THREE.Vector3(
     horizontalAnchor.x,
     verticalAnchor.y,
@@ -687,7 +674,6 @@ function positionGarmentOnAvatar(
 
   garment.position.add(translation);
 
-  // Frente do avatar = +Z.
   garment.position.z += CLOTHING_FORWARD_OFFSET;
 
   garment.updateMatrix();
@@ -731,7 +717,6 @@ function prepareObjectForRendering(
 
     child.castShadow = false;
     child.receiveShadow = false;
-
     child.frustumCulled = true;
   });
 
@@ -747,8 +732,6 @@ function cloneGarment(
 ): Object3D {
   const cloned = original.clone(true);
 
-  // Preserva a geometria e os materiais originais.
-  // Nenhum Shape Key é necessário.
   prepareObjectForRendering(cloned);
 
   return cloned;
@@ -1013,7 +996,6 @@ function ClothingModel({
 
         const generated = cloneGarment(original);
 
-        // Identifica o tipo pela metadata ou nome do arquivo.
         if (
           !generated.userData.garmentType &&
           clothingModelUrl
@@ -1027,22 +1009,26 @@ function ClothingModel({
           }
         }
 
-        // Escala uniforme para acompanhar a normalização
-        // aplicada ao avatar Tripo.
+        // Escala uniforme correspondente à normalização
+        // do avatar. Não altera largura ou profundidade.
         const uniformScale = applyGarmentScale(
           generated,
           measurements,
         );
 
-        // Não aplicar escala X/Z automática.
-        // Preservar a modelagem original do GLB.
-
+        // Mantém o posicionamento anatômico existente.
         const positioned = positionGarmentOnAvatar(
           generated,
           avatarFitData,
         );
 
         generated.userData.isImportedGarment = true;
+
+        // Colisão temporariamente desativada.
+        // Não criar malha corporal nem executar simulação.
+        generated.userData.collisionCorrectionApplied = false;
+        generated.userData.collisionMeshesProcessed = 0;
+        generated.userData.collisionMeshesSkipped = 0;
 
         generated.updateMatrixWorld(true);
 
@@ -1060,6 +1046,7 @@ function ClothingModel({
             object: generated,
             uniformScale,
             positioned,
+            collisionCorrectionApplied: false,
             position: generated.position.toArray(),
             rotation: generated.rotation.toArray(),
             scale: generated.scale.toArray(),
@@ -1085,8 +1072,6 @@ function ClothingModel({
       }
     };
 
-    // Compatibilidade: se o objeto já foi recebido,
-    // utiliza-o sem precisar carregar outro arquivo.
     if (clothingObject && !clothingModelUrl) {
       processGarment(
         clothingObject,
@@ -1098,7 +1083,6 @@ function ClothingModel({
       };
     }
 
-    // Carregamento direto do GLB / GLTF.
     if (clothingModelUrl) {
       const loader = new GLTFLoader();
 
