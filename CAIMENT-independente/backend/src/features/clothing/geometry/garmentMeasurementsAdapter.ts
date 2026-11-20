@@ -6,10 +6,7 @@ import type {
   PantsMeasurements,
 } from './types';
 
-type MeasurementType =
-  | 'circumference'
-  | 'linear'
-  | 'length';
+type MeasurementType = 'circumference' | 'linear' | 'length';
 
 type MeasurementSpec = {
   field: string;
@@ -47,6 +44,14 @@ export interface StoreCatalogProduct {
   name?: string;
   size?: string;
 
+  color?: string;
+  colorHex?: string;
+  fabric?: {
+    color?: string;
+    colorHex?: string;
+    [key: string]: unknown;
+  };
+
   measurementUnit?: string;
   measurementConvention?: string;
   unit?: string;
@@ -63,6 +68,8 @@ export interface StoreCatalogProduct {
     id: string;
     name: string;
     category?: string;
+    color?: string;
+    colorHex?: string;
     [key: string]: unknown;
   };
 
@@ -74,9 +81,6 @@ export interface StoreCatalogProduct {
   [key: string]: unknown;
 }
 
-/**
- * Mantém os nomes utilizados pelo restante da integração.
- */
 export interface RegataGeometryMeasurements
   extends TShirtMeasurements {}
 
@@ -95,6 +99,7 @@ export type AdaptedGarment =
       productId: string;
       productName: string;
       size: string;
+      color?: string;
       measurements: RegataGeometryMeasurements;
     }
   | {
@@ -102,6 +107,7 @@ export type AdaptedGarment =
       productId: string;
       productName: string;
       size: string;
+      color?: string;
       measurements: ShortGeometryMeasurements;
     }
   | {
@@ -109,6 +115,7 @@ export type AdaptedGarment =
       productId: string;
       productName: string;
       size: string;
+      color?: string;
       measurements: DressGeometryMeasurements;
     }
   | {
@@ -116,6 +123,7 @@ export type AdaptedGarment =
       productId: string;
       productName: string;
       size: string;
+      color?: string;
       measurements: PantsGeometryMeasurements;
     };
 
@@ -124,6 +132,7 @@ interface NormalizedProduct {
   name: string;
   size: string;
   profile: string;
+  color?: string;
   measurements: Record<string, CatalogMeasurement>;
   convention?: string;
 }
@@ -158,40 +167,45 @@ function isNonEmptyString(
 }
 
 /**
- * ============================================================
- * CLASSIFICAÇÃO DAS MEDIDAS
- * ============================================================
+ * Recupera a cor escolhida no FitSense.
  *
- * O catálogo FitSense pode enviar:
- *
- * 1. Valores estruturados:
- *    { value: 98, unit: 'cm', type: 'circumference' }
- *
- * 2. Valores numéricos:
- *    { waistWidth: 82 }
- *
- * No segundo caso, o tipo é identificado pelo nome do campo.
- *
- * Isso evita classificar uma circunferência como linear
- * apenas porque o catálogo enviou um número simples.
+ * A seleção do usuário tem prioridade sobre a cor padrão
+ * cadastrada no produto.
  */
+function getProductColor(
+  product: StoreCatalogProduct,
+): string | undefined {
+  const candidates: unknown[] = [
+    product.selection?.color,
+    product.color,
+    product.colorHex,
+    product.product?.color,
+    product.product?.colorHex,
+    product.fabric?.color,
+    product.fabric?.colorHex,
+  ];
+
+  for (const candidate of candidates) {
+    if (isNonEmptyString(candidate)) {
+      return candidate.trim();
+    }
+  }
+
+  return undefined;
+}
 
 const CIRCUMFERENCE_FIELDS = new Set([
   'chestCircumference',
   'waistCircumference',
   'hemCircumference',
-
   'bustWidth',
   'waistWidth',
   'hipWidth',
-
   'thighWidth',
   'legOpening',
-
   'kneeCircumference',
   'calfCircumference',
   'ankleCircumference',
-
   'waistbandCircumference',
 ]);
 
@@ -199,37 +213,28 @@ const LENGTH_FIELDS = new Set([
   'height',
   'length',
   'outseamLength',
-
   'crotchDepth',
   'rise',
   'frontRise',
   'backRise',
   'frontCrotchLength',
   'backCrotchLength',
-
   'bustHeight',
   'waistHeight',
   'hipHeight',
   'hemHeight',
-
   'strapLength',
-
   'frontNeckDepth',
   'backNeckDepth',
-
   'armholeDepth',
   'armholeFrontDepth',
   'armholeBackDepth',
-
   'thighHeight',
   'kneeHeight',
   'calfHeight',
-
   'waistbandHeight',
-
   'leftLegLength',
   'rightLegLength',
-
   'frontLength',
   'backLength',
   'skirtFrontLength',
@@ -241,27 +246,20 @@ const LINEAR_FIELDS = new Set([
   'depth',
   'shoulderWidth',
   'neckWidth',
-
   'strapWidth',
   'strapSpacing',
   'strapPositionFront',
   'strapPositionBack',
-
   'necklineFrontWidth',
   'necklineBackWidth',
-
   'armholeWidth',
-
   'crotchWidth',
   'legSeparation',
-
   'hemWidth',
   'necklineFinishWidth',
   'armholeFinishWidth',
   'waistbandFinishWidth',
-
   'skirtFlare',
-
   'bustDepth',
   'waistDepth',
   'hipDepth',
@@ -287,18 +285,6 @@ function inferMeasurementType(
     'Informe explicitamente circumference, linear ou length no catálogo.',
   );
 }
-
-/**
- * ============================================================
- * UNIDADES
- * ============================================================
- *
- * O sistema geométrico do CAIMENT trabalha em metros.
- *
- * O catálogo FitSense utiliza centímetros.
- *
- * Valores já recebidos em metros também são aceitos.
- */
 
 function normalizeUnit(unit: string): string {
   return unit.trim().toLowerCase();
@@ -347,12 +333,6 @@ function isZeroAllowedMeasurement(
   );
 }
 
-/**
- * ============================================================
- * NORMALIZAÇÃO DAS MEDIDAS
- * ============================================================
- */
-
 function normalizeMeasurements(
   source: Record<string, unknown>,
   defaultUnit: string,
@@ -367,10 +347,6 @@ function normalizeMeasurements(
 
     if (typeof raw === 'number') {
       value = raw;
-
-      // Corrigido:
-      // O tipo é inferido pelo nome do campo,
-      // e não classificado automaticamente como linear.
       type = inferMeasurementType(key);
     } else if (isRecord(raw)) {
       value = raw.value;
@@ -423,7 +399,6 @@ function normalizeMeasurements(
       );
     }
 
-    // Valida a unidade antes de armazenar.
     convertToMeters(value, unit, key);
 
     result[key] = {
@@ -442,27 +417,6 @@ function normalizeMeasurements(
 
   return result;
 }
-
-/**
- * ============================================================
- * EXTRAÇÃO DAS MEDIDAS
- * ============================================================
- *
- * Aceita:
- *
- * {
- *   unit: 'cm',
- *   values: { ... },
- *   convention: '...'
- * }
- *
- * Ou medidas diretamente na raiz:
- *
- * {
- *   width: 48,
- *   height: 66
- * }
- */
 
 function extractMeasurementSource(
   source: Record<string, unknown>,
@@ -510,12 +464,6 @@ function extractMeasurementSource(
     convention,
   };
 }
-
-/**
- * ============================================================
- * NORMALIZAÇÃO DO PRODUTO
- * ============================================================
- */
 
 function normalizeProduct(
   product: StoreCatalogProduct,
@@ -577,10 +525,6 @@ function normalizeProduct(
       ? product.measurementConvention
       : undefined;
 
-  /**
-   * Primeiro verifica se o produto já recebeu
-   * as medidas do tamanho selecionado.
-   */
   const source = product.measurements;
 
   if (isRecord(source)) {
@@ -598,10 +542,6 @@ function normalizeProduct(
     }
   }
 
-  /**
-   * Caso não existam medidas individuais,
-   * procura o tamanho dentro de sizes[].
-   */
   if (
     !rawMeasurements &&
     Array.isArray(product.sizes)
@@ -649,6 +589,9 @@ function normalizeProduct(
     size: size.trim(),
     profile: profile.trim().toLowerCase(),
 
+    // A cor é preservada separadamente das medidas.
+    color: getProductColor(product),
+
     measurements: normalizeMeasurements(
       rawMeasurements,
       unit,
@@ -657,12 +600,6 @@ function normalizeProduct(
     convention,
   };
 }
-
-/**
- * ============================================================
- * LEITURA E VALIDAÇÃO DAS MEDIDAS
- * ============================================================
- */
 
 function getMeasurement(
   measurements: Record<string, CatalogMeasurement>,
@@ -696,11 +633,7 @@ function getLinear(
   measurements: Record<string, CatalogMeasurement>,
   field: string,
 ): number {
-  return getMeasurement(
-    measurements,
-    field,
-    ['linear'],
-  );
+  return getMeasurement(measurements, field, ['linear']);
 }
 
 function getGeometricDimension(
@@ -736,12 +669,6 @@ function getLength(
   );
 }
 
-/**
- * Obtém medidas opcionais.
- *
- * Medidas ausentes continuam ausentes.
- * Nenhum valor artificial é criado.
- */
 function getOptionalFields(
   measurements: Record<string, CatalogMeasurement>,
   specs: MeasurementSpec[],
@@ -763,148 +690,61 @@ function getOptionalFields(
   return result;
 }
 
-const LINEAR_TYPES: MeasurementType[] = [
-  'linear',
-];
-
-const LENGTH_TYPES: MeasurementType[] = [
-  'length',
-  'linear',
-];
-
-const DIMENSION_TYPES: MeasurementType[] = [
-  'linear',
-  'length',
-];
-
-const CIRCUMFERENCE_TYPES: MeasurementType[] = [
-  'circumference',
-];
-
-/**
- * ============================================================
- * REGATA
- * geometryProfile: tshirt-basic
- * garmentModel: tank-top
- * ============================================================
- *
- * Utiliza createTShirtGeometry.
- * O gerador representa a regata, não uma camiseta com mangas.
- */
+const LINEAR_TYPES: MeasurementType[] = ['linear'];
+const LENGTH_TYPES: MeasurementType[] = ['length', 'linear'];
+const DIMENSION_TYPES: MeasurementType[] = ['linear', 'length'];
+const CIRCUMFERENCE_TYPES: MeasurementType[] = ['circumference'];
 
 function adaptTShirt(
   measurements: Record<string, CatalogMeasurement>,
 ): RegataGeometryMeasurements {
   const required: TShirtMeasurements = {
-    width: getLinear(
-      measurements,
-      'width',
-    ),
-
-    height: getLength(
-      measurements,
-      'height',
-    ),
-
-    depth: getGeometricDimension(
-      measurements,
-      'depth',
-    ),
-
-    shoulderWidth: getLinear(
-      measurements,
-      'shoulderWidth',
-    ),
-
-    neckWidth: getLinear(
-      measurements,
-      'neckWidth',
-    ),
+    width: getLinear(measurements, 'width'),
+    height: getLength(measurements, 'height'),
+    depth: getGeometricDimension(measurements, 'depth'),
+    shoulderWidth: getLinear(measurements, 'shoulderWidth'),
+    neckWidth: getLinear(measurements, 'neckWidth'),
   };
 
   const optional = getOptionalFields(measurements, [
     { field: 'chestCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
     { field: 'waistCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
     { field: 'hemCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
-
     { field: 'bustHeight', allowedTypes: LENGTH_TYPES },
     { field: 'waistHeight', allowedTypes: LENGTH_TYPES },
     { field: 'hemHeight', allowedTypes: LENGTH_TYPES },
-
     { field: 'strapWidth', allowedTypes: LINEAR_TYPES },
     { field: 'strapLength', allowedTypes: LENGTH_TYPES },
     { field: 'strapSpacing', allowedTypes: LINEAR_TYPES },
     { field: 'strapPositionFront', allowedTypes: LINEAR_TYPES },
     { field: 'strapPositionBack', allowedTypes: LINEAR_TYPES },
-
     { field: 'frontNeckDepth', allowedTypes: LENGTH_TYPES },
     { field: 'backNeckDepth', allowedTypes: LENGTH_TYPES },
     { field: 'necklineFrontWidth', allowedTypes: LINEAR_TYPES },
     { field: 'necklineBackWidth', allowedTypes: LINEAR_TYPES },
-
     { field: 'armholeDepth', allowedTypes: LENGTH_TYPES },
     { field: 'armholeFrontDepth', allowedTypes: LENGTH_TYPES },
     { field: 'armholeBackDepth', allowedTypes: LENGTH_TYPES },
     { field: 'armholeWidth', allowedTypes: LINEAR_TYPES },
-
     { field: 'hemWidth', allowedTypes: LINEAR_TYPES },
     { field: 'necklineFinishWidth', allowedTypes: LINEAR_TYPES },
     { field: 'armholeFinishWidth', allowedTypes: LINEAR_TYPES },
   ]);
 
-  return {
-    ...required,
-    ...optional,
-  };
+  return { ...required, ...optional };
 }
-
-/**
- * ============================================================
- * VESTIDO
- * geometryProfile: dress-a-line
- * ============================================================
- *
- * bustWidth, waistWidth e hipWidth são circunferências.
- */
 
 function adaptDress(
   measurements: Record<string, CatalogMeasurement>,
 ): DressGeometryMeasurements {
   const required: DressMeasurements = {
-    bustWidth: getCircumference(
-      measurements,
-      'bustWidth',
-    ),
-
-    waistWidth: getCircumference(
-      measurements,
-      'waistWidth',
-    ),
-
-    hipWidth: getCircumference(
-      measurements,
-      'hipWidth',
-    ),
-
-    length: getLength(
-      measurements,
-      'length',
-    ),
-
-    shoulderWidth: getLinear(
-      measurements,
-      'shoulderWidth',
-    ),
-
-    depth: getGeometricDimension(
-      measurements,
-      'depth',
-    ),
-
-    strapWidth: getLinear(
-      measurements,
-      'strapWidth',
-    ),
+    bustWidth: getCircumference(measurements, 'bustWidth'),
+    waistWidth: getCircumference(measurements, 'waistWidth'),
+    hipWidth: getCircumference(measurements, 'hipWidth'),
+    length: getLength(measurements, 'length'),
+    shoulderWidth: getLinear(measurements, 'shoulderWidth'),
+    depth: getGeometricDimension(measurements, 'depth'),
+    strapWidth: getLinear(measurements, 'strapWidth'),
   };
 
   const optional = getOptionalFields(measurements, [
@@ -912,102 +752,47 @@ function adaptDress(
     { field: 'strapSpacing', allowedTypes: LINEAR_TYPES },
     { field: 'strapPositionFront', allowedTypes: LINEAR_TYPES },
     { field: 'strapPositionBack', allowedTypes: LINEAR_TYPES },
-
     { field: 'frontNeckDepth', allowedTypes: LENGTH_TYPES },
     { field: 'backNeckDepth', allowedTypes: LENGTH_TYPES },
     { field: 'necklineFrontWidth', allowedTypes: LINEAR_TYPES },
     { field: 'necklineBackWidth', allowedTypes: LINEAR_TYPES },
-
     { field: 'armholeDepth', allowedTypes: LENGTH_TYPES },
     { field: 'armholeFrontDepth', allowedTypes: LENGTH_TYPES },
     { field: 'armholeBackDepth', allowedTypes: LENGTH_TYPES },
     { field: 'armholeWidth', allowedTypes: LINEAR_TYPES },
-
     { field: 'bustHeight', allowedTypes: LENGTH_TYPES },
     { field: 'waistHeight', allowedTypes: LENGTH_TYPES },
     { field: 'hipHeight', allowedTypes: LENGTH_TYPES },
-
     { field: 'frontLength', allowedTypes: LENGTH_TYPES },
     { field: 'backLength', allowedTypes: LENGTH_TYPES },
-
     { field: 'hemCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
     { field: 'skirtFlare', allowedTypes: DIMENSION_TYPES },
     { field: 'skirtFrontLength', allowedTypes: LENGTH_TYPES },
     { field: 'skirtBackLength', allowedTypes: LENGTH_TYPES },
-
     { field: 'bustDepth', allowedTypes: LENGTH_TYPES },
     { field: 'waistDepth', allowedTypes: LENGTH_TYPES },
     { field: 'hipDepth', allowedTypes: LENGTH_TYPES },
-
     { field: 'hemWidth', allowedTypes: LINEAR_TYPES },
     { field: 'necklineFinishWidth', allowedTypes: LINEAR_TYPES },
     { field: 'armholeFinishWidth', allowedTypes: LINEAR_TYPES },
   ]);
 
-  return {
-    ...required,
-    ...optional,
-  };
+  return { ...required, ...optional };
 }
-
-/**
- * ============================================================
- * SHORT
- * geometryProfile: shorts-basic
- * ============================================================
- *
- * waistWidth, hipWidth, thighWidth e legOpening
- * são circunferências completas.
- */
 
 function adaptShort(
   measurements: Record<string, CatalogMeasurement>,
 ): ShortGeometryMeasurements {
   const required: ShortMeasurements = {
-    waistWidth: getCircumference(
-      measurements,
-      'waistWidth',
-    ),
-
-    hipWidth: getCircumference(
-      measurements,
-      'hipWidth',
-    ),
-
-    thighWidth: getCircumference(
-      measurements,
-      'thighWidth',
-    ),
-
-    legOpening: getCircumference(
-      measurements,
-      'legOpening',
-    ),
-
-    length: getLength(
-      measurements,
-      'length',
-    ),
-
-    depth: getGeometricDimension(
-      measurements,
-      'depth',
-    ),
-
-    crotchDepth: getLength(
-      measurements,
-      'crotchDepth',
-    ),
-
-    crotchWidth: getLinear(
-      measurements,
-      'crotchWidth',
-    ),
-
-    rise: getLength(
-      measurements,
-      'rise',
-    ),
+    waistWidth: getCircumference(measurements, 'waistWidth'),
+    hipWidth: getCircumference(measurements, 'hipWidth'),
+    thighWidth: getCircumference(measurements, 'thighWidth'),
+    legOpening: getCircumference(measurements, 'legOpening'),
+    length: getLength(measurements, 'length'),
+    depth: getGeometricDimension(measurements, 'depth'),
+    crotchDepth: getLength(measurements, 'crotchDepth'),
+    crotchWidth: getLinear(measurements, 'crotchWidth'),
+    rise: getLength(measurements, 'rise'),
   };
 
   const optional = getOptionalFields(measurements, [
@@ -1015,89 +800,36 @@ function adaptShort(
     { field: 'backRise', allowedTypes: LENGTH_TYPES },
     { field: 'frontCrotchLength', allowedTypes: LENGTH_TYPES },
     { field: 'backCrotchLength', allowedTypes: LENGTH_TYPES },
-
     { field: 'kneeCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
     { field: 'thighHeight', allowedTypes: LENGTH_TYPES },
     { field: 'kneeHeight', allowedTypes: LENGTH_TYPES },
-
     { field: 'outseamLength', allowedTypes: LENGTH_TYPES },
-
     { field: 'waistbandHeight', allowedTypes: LENGTH_TYPES },
     { field: 'waistbandCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
-
     { field: 'leftLegLength', allowedTypes: LENGTH_TYPES },
     { field: 'rightLegLength', allowedTypes: LENGTH_TYPES },
     { field: 'legSeparation', allowedTypes: LINEAR_TYPES },
-
     { field: 'hemWidth', allowedTypes: LINEAR_TYPES },
     { field: 'waistbandFinishWidth', allowedTypes: LINEAR_TYPES },
     { field: 'hemCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
   ]);
 
-  return {
-    ...required,
-    ...optional,
-  };
+  return { ...required, ...optional };
 }
-
-/**
- * ============================================================
- * CALÇA
- * geometryProfile: pants-wide-leg
- * ============================================================
- *
- * waistWidth, hipWidth, thighWidth e legOpening
- * são circunferências completas.
- */
 
 function adaptPants(
   measurements: Record<string, CatalogMeasurement>,
 ): PantsGeometryMeasurements {
   const required: PantsMeasurements = {
-    waistWidth: getCircumference(
-      measurements,
-      'waistWidth',
-    ),
-
-    hipWidth: getCircumference(
-      measurements,
-      'hipWidth',
-    ),
-
-    thighWidth: getCircumference(
-      measurements,
-      'thighWidth',
-    ),
-
-    legOpening: getCircumference(
-      measurements,
-      'legOpening',
-    ),
-
-    length: getLength(
-      measurements,
-      'length',
-    ),
-
-    depth: getGeometricDimension(
-      measurements,
-      'depth',
-    ),
-
-    crotchDepth: getLength(
-      measurements,
-      'crotchDepth',
-    ),
-
-    crotchWidth: getLinear(
-      measurements,
-      'crotchWidth',
-    ),
-
-    rise: getLength(
-      measurements,
-      'rise',
-    ),
+    waistWidth: getCircumference(measurements, 'waistWidth'),
+    hipWidth: getCircumference(measurements, 'hipWidth'),
+    thighWidth: getCircumference(measurements, 'thighWidth'),
+    legOpening: getCircumference(measurements, 'legOpening'),
+    length: getLength(measurements, 'length'),
+    depth: getGeometricDimension(measurements, 'depth'),
+    crotchDepth: getLength(measurements, 'crotchDepth'),
+    crotchWidth: getLinear(measurements, 'crotchWidth'),
+    rise: getLength(measurements, 'rise'),
   };
 
   const optional = getOptionalFields(measurements, [
@@ -1105,48 +837,32 @@ function adaptPants(
     { field: 'backRise', allowedTypes: LENGTH_TYPES },
     { field: 'frontCrotchLength', allowedTypes: LENGTH_TYPES },
     { field: 'backCrotchLength', allowedTypes: LENGTH_TYPES },
-
     { field: 'kneeCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
     { field: 'calfCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
     { field: 'ankleCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
-
     { field: 'thighHeight', allowedTypes: LENGTH_TYPES },
     { field: 'kneeHeight', allowedTypes: LENGTH_TYPES },
     { field: 'calfHeight', allowedTypes: LENGTH_TYPES },
-
     { field: 'outseamLength', allowedTypes: LENGTH_TYPES },
-
     { field: 'waistbandHeight', allowedTypes: LENGTH_TYPES },
     { field: 'waistbandCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
-
     { field: 'leftLegLength', allowedTypes: LENGTH_TYPES },
     { field: 'rightLegLength', allowedTypes: LENGTH_TYPES },
     { field: 'legSeparation', allowedTypes: LINEAR_TYPES },
-
     { field: 'hemWidth', allowedTypes: LINEAR_TYPES },
     { field: 'waistbandFinishWidth', allowedTypes: LINEAR_TYPES },
     { field: 'hemCircumference', allowedTypes: CIRCUMFERENCE_TYPES },
   ]);
 
-  return {
-    ...required,
-    ...optional,
-  };
+  return { ...required, ...optional };
 }
 
 /**
- * ============================================================
- * ADAPTADOR PRINCIPAL
- * ============================================================
+ * Adaptador principal.
  *
- * Identifica o perfil geométrico e entrega ao gerador
- * as medidas correspondentes em metros.
- *
- * Não inventa medidas ausentes.
- * Não divide circunferências.
- * Não substitui medidas opcionais ausentes por valores fixos.
+ * Preserva a cor selecionada no FitSense e entrega
+ * essa informação junto com as medidas ao CAIMENT.
  */
-
 export function adaptStoreProductMeasurements(
   product: StoreCatalogProduct,
   selectedSize?: string,
@@ -1160,6 +876,9 @@ export function adaptStoreProductMeasurements(
     productId: normalized.id,
     productName: normalized.name,
     size: normalized.size,
+    ...(normalized.color
+      ? { color: normalized.color }
+      : {}),
   };
 
   switch (normalized.profile) {
@@ -1168,36 +887,28 @@ export function adaptStoreProductMeasurements(
       return {
         ...base,
         type: 'tshirt',
-        measurements: adaptTShirt(
-          normalized.measurements,
-        ),
+        measurements: adaptTShirt(normalized.measurements),
       };
 
     case 'shorts-basic':
       return {
         ...base,
         type: 'short',
-        measurements: adaptShort(
-          normalized.measurements,
-        ),
+        measurements: adaptShort(normalized.measurements),
       };
 
     case 'dress-a-line':
       return {
         ...base,
         type: 'dress',
-        measurements: adaptDress(
-          normalized.measurements,
-        ),
+        measurements: adaptDress(normalized.measurements),
       };
 
     case 'pants-wide-leg':
       return {
         ...base,
         type: 'pants',
-        measurements: adaptPants(
-          normalized.measurements,
-        ),
+        measurements: adaptPants(normalized.measurements),
       };
 
     default:

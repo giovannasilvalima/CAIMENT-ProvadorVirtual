@@ -500,7 +500,11 @@ function createWeldGroups(
 
     if (offset === undefined) continue;
 
-    for (let vertexIndex = 0; vertexIndex < panel.vertices.length; vertexIndex++) {
+    for (
+      let vertexIndex = 0;
+      vertexIndex < panel.vertices.length;
+      vertexIndex++
+    ) {
       const key = `${panel.id}:${vertexIndex}`;
 
       if (!parents.has(key)) continue;
@@ -802,7 +806,6 @@ function createAssembledGeometry(
         vertex.position.z,
       );
 
-      // Massa individual usada pela simulação física.
       masses.push(vertex.mass ?? 1);
     }
   }
@@ -883,13 +886,6 @@ function createAssembledGeometry(
     disjointSet.parents,
   );
 
-  /*
-   * IMPORTANTE:
-   * Não fazemos média nem deslocamento das posições dos vértices.
-   * Isso preserva a modelagem original de cada painel e evita
-   * triângulos degenerados causados pelo colapso das costuras.
-   */
-
   for (const panel of meshData.panels) {
     const offset = panelOffsets.get(panel.id)!;
 
@@ -945,7 +941,6 @@ function createAssembledGeometry(
     new THREE.Float32BufferAttribute(positions, 3),
   );
 
-  // Atributo lido diretamente pela ClothSimulation.
   geometry.setAttribute(
     'mass',
     new THREE.Float32BufferAttribute(masses, 1),
@@ -1028,7 +1023,7 @@ function createAssembledGeometry(
 
 function createSeamVisualDetails(
   geometry: THREE.BufferGeometry,
-  fabricColor: THREE.ColorRepresentation,
+  fabricColor: THREE.Color,
 ): THREE.Group | null {
   const resolvedSeams =
     geometry.userData.resolvedSeamEdges as
@@ -1065,7 +1060,7 @@ function createSeamVisualDetails(
     EPSILON * 10,
   );
 
-  const seamColor = new THREE.Color(fabricColor).multiplyScalar(0.62);
+  const seamColor = fabricColor.clone().multiplyScalar(0.62);
 
   const seamMaterial = new THREE.LineBasicMaterial({
     color: seamColor,
@@ -1277,7 +1272,7 @@ export function assembleGarment(
     options.material ??
     createFabricMaterial({
       ...fabricOptions,
-      color: fabricOptions?.color ?? '#9254e1',
+      color: fabricOptions?.color ?? '#ffffff',
       roughness: fabricOptions?.roughness ?? 0.85,
       metalness: fabricOptions?.metalness ?? 0,
       side: fabricOptions?.side ?? THREE.DoubleSide,
@@ -1299,9 +1294,20 @@ export function assembleGarment(
   group.name = 'AssembledGarment';
   group.add(mesh);
 
+  // Usa a cor efetiva do material, inclusive quando ele foi fornecido
+  // externamente por options.material.
+  const effectiveFabricColor =
+    material instanceof THREE.MeshStandardMaterial ||
+    material instanceof THREE.MeshPhysicalMaterial ||
+    material instanceof THREE.MeshPhongMaterial ||
+    material instanceof THREE.MeshLambertMaterial ||
+    material instanceof THREE.MeshBasicMaterial
+      ? material.color.clone()
+      : new THREE.Color(fabricOptions?.color ?? '#ffffff');
+
   const visualDetails = createSeamVisualDetails(
     geometry,
-    fabricOptions?.color ?? '#9254e1',
+    effectiveFabricColor,
   );
 
   if (visualDetails) {
@@ -1311,6 +1317,8 @@ export function assembleGarment(
   group.userData.meshData = meshData;
   group.userData.isAssembled = true;
   group.userData.garmentFit = meshData.fit ?? null;
+
+  group.userData.fabricColor = `#${effectiveFabricColor.getHexString()}`;
 
   group.userData.assembledGarmentRegions =
     geometry.userData.assembledGarmentRegions;

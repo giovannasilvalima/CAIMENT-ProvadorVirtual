@@ -10,17 +10,9 @@ export interface FabricMaterialOptions {
   opacity?: number;
   transparent?: boolean;
   wireframe?: boolean;
-
-  /** Ativa ou desativa a trama procedural do tecido. */
   useProceduralTexture?: boolean;
-
-  /** Quantidade de repetições da trama na superfície. */
   textureScale?: number;
-
-  /** Intensidade do relevo microscópico do tecido. */
   bumpScale?: number;
-
-  /** Intensidade do contraste visual da trama. */
   textureStrength?: number;
 }
 
@@ -48,7 +40,6 @@ const FABRIC_PRESETS: Record<FabricPreset, FabricPresetConfig> = {
     textureStrength: 0.8,
     textureScale: 8,
   },
-
   jeans: {
     roughness: 0.88,
     metalness: 0,
@@ -56,7 +47,6 @@ const FABRIC_PRESETS: Record<FabricPreset, FabricPresetConfig> = {
     textureStrength: 1,
     textureScale: 10,
   },
-
   linen: {
     roughness: 0.96,
     metalness: 0,
@@ -64,7 +54,6 @@ const FABRIC_PRESETS: Record<FabricPreset, FabricPresetConfig> = {
     textureStrength: 1,
     textureScale: 7,
   },
-
   silk: {
     roughness: 0.38,
     metalness: 0,
@@ -72,7 +61,6 @@ const FABRIC_PRESETS: Record<FabricPreset, FabricPresetConfig> = {
     textureStrength: 0.25,
     textureScale: 8,
   },
-
   polyester: {
     roughness: 0.58,
     metalness: 0,
@@ -80,7 +68,6 @@ const FABRIC_PRESETS: Record<FabricPreset, FabricPresetConfig> = {
     textureStrength: 0.45,
     textureScale: 9,
   },
-
   default: {
     roughness: 0.85,
     metalness: 0,
@@ -90,12 +77,6 @@ const FABRIC_PRESETS: Record<FabricPreset, FabricPresetConfig> = {
   },
 };
 
-/**
- * Cria uma textura procedural de trama.
- *
- * Não depende de imagens externas, Canvas ou arquivos adicionais.
- * A textura é gerada diretamente pelo Three.js.
- */
 function createWovenTexture(
   strength: number,
   textureScale: number,
@@ -120,7 +101,6 @@ function createWovenTexture(
       const weftThread = weftPosition < threadSize / 2;
 
       const intersection = warpThread === weftThread;
-
       const threadVariation = intersection ? 7 : -5;
 
       const waveX = Math.sin((x / threadSize) * Math.PI * 2);
@@ -136,9 +116,7 @@ function createWovenTexture(
         value = 128 + (relief - 128) * safeStrength;
         value += waveVariation * safeStrength;
       } else {
-        const base = 238;
-
-        value = base + threadVariation * safeStrength;
+        value = 238 + threadVariation * safeStrength;
         value += waveVariation * safeStrength;
       }
 
@@ -161,7 +139,6 @@ function createWovenTexture(
 
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-
   texture.repeat.set(safeScale, safeScale);
 
   texture.magFilter = THREE.LinearFilter;
@@ -179,17 +156,11 @@ function createWovenTexture(
   return texture;
 }
 
-/**
- * Cria o material visual do tecido.
- *
- * A textura melhora a aparência da superfície sem alterar
- * a geometria utilizada pela montagem ou simulação física.
- */
 export function createFabricMaterial(
   options: FabricMaterialOptions = {},
 ): THREE.MeshStandardMaterial {
   const {
-    color = '#9254e1',
+    color = '#ffffff',
     roughness = 0.85,
     metalness = 0,
     side = THREE.DoubleSide,
@@ -233,12 +204,9 @@ export function createFabricMaterial(
   return material;
 }
 
-/**
- * Cria um material a partir de um tipo de tecido.
- */
 export function createFabricMaterialFromPreset(
   preset: FabricPreset,
-  color: THREE.ColorRepresentation = '#9254e1',
+  color: THREE.ColorRepresentation = '#ffffff',
 ): THREE.MeshStandardMaterial {
   const config = FABRIC_PRESETS[preset] ?? FABRIC_PRESETS.default;
 
@@ -253,12 +221,6 @@ export function createFabricMaterialFromPreset(
   });
 }
 
-/**
- * Cria um material usando os parâmetros de tecido recebidos.
- *
- * Os parâmetros existentes são preservados e os valores visuais
- * são aproveitados quando estiverem disponíveis.
- */
 export function createFabricMaterialFromParameters(
   parameters: FabricParameters,
 ): THREE.MeshStandardMaterial {
@@ -298,7 +260,7 @@ export function createFabricMaterialFromParameters(
       }
     }
 
-    return '#9254e1';
+    return '#ffffff';
   };
 
   return createFabricMaterial({
@@ -331,9 +293,6 @@ export function createFabricMaterialFromParameters(
   });
 }
 
-/**
- * Aplica um material a todas as malhas de um grupo.
- */
 export function applyFabricMaterial(
   group: THREE.Group,
   material: THREE.Material,

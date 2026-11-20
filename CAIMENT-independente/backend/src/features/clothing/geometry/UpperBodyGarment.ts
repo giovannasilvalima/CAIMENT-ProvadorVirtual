@@ -8,21 +8,9 @@ import {
   type GarmentFitDefinition,
   type GarmentMeshData,
   type GarmentPanel,
+  type GarmentRegionDefinition,
 } from './types';
 
-// ============================================================
-// CONFIGURAÇÃO
-// ============================================================
-
-/**
- * Folga padrão do encaixe superior.
- *
- * Unidade: metros.
- *
- * O valor segue a referência utilizada pelo encaixe inferior.
- * Pode ser substituído por uma folga positiva recebida
- * nos metadados da peça.
- */
 const DEFAULT_UPPER_BODY_CLEARANCE = 0.02;
 
 type UpperBodyGarmentType = 'tshirt' | 'dress';
@@ -38,13 +26,7 @@ interface PanelReference {
   bounds: PanelBounds;
 }
 
-// ============================================================
-// VALIDAÇÃO
-// ============================================================
-
-function isFiniteVector(
-  value: THREE.Vector3,
-): boolean {
+function isFiniteVector(value: THREE.Vector3): boolean {
   return (
     Number.isFinite(value.x) &&
     Number.isFinite(value.y) &&
@@ -52,9 +34,7 @@ function isFiniteVector(
   );
 }
 
-function validatePanel(
-  panel: GarmentPanel,
-): void {
+function validatePanel(panel: GarmentPanel): void {
   if (!panel.vertices.length) {
     throw new Error(
       `CAIMENT: o painel "${panel.id}" não possui vértices.`,
@@ -68,28 +48,30 @@ function validatePanel(
       );
     }
   }
+
+  for (const triangle of panel.triangles) {
+    const indices = [triangle.a, triangle.b, triangle.c];
+
+    if (
+      indices.some(
+        (index) =>
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= panel.vertices.length,
+      )
+    ) {
+      throw new Error(
+        `CAIMENT: o painel "${panel.id}" possui um triângulo com índices inválidos.`,
+      );
+    }
+  }
 }
 
-// ============================================================
-// LIMITES GEOMÉTRICOS
-// ============================================================
-
-function getPanelBounds(
-  panel: GarmentPanel,
-): PanelBounds {
+function getPanelBounds(panel: GarmentPanel): PanelBounds {
   validatePanel(panel);
 
-  const min = new THREE.Vector3(
-    Infinity,
-    Infinity,
-    Infinity,
-  );
-
-  const max = new THREE.Vector3(
-    -Infinity,
-    -Infinity,
-    -Infinity,
-  );
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
 
   for (const vertex of panel.vertices) {
     min.min(vertex.position);
@@ -103,70 +85,23 @@ function getPanelBounds(
   };
 }
 
-// ============================================================
-// REFERÊNCIA FRONTAL
-// ============================================================
+function getFrontReference(meshData: GarmentMeshData): PanelReference {
+  const preferredPanel =
+    meshData.panels.find((panel) => panel.id === 'front') ??
+    meshData.panels.find((panel) => panel.type === 'front');
 
-/**
- * Prioriza os painéis frontais reais dos geradores.
- *
- * Regata:
- * - front
- * - back
- *
- * Vestido:
- * - front
- * - back
- * - skirtFront
- * - skirtBack, quando disponíveis
- */
-function getFrontReference(
-  meshData: GarmentMeshData,
-): PanelReference {
-  const preferredIds = [
-    'front',
-    'skirtFront',
-  ];
-
-  for (const id of preferredIds) {
-    const panel = meshData.panels.find(
-      (candidate) => candidate.id === id,
+  if (!preferredPanel) {
+    throw new Error(
+      'CAIMENT: não foi encontrado um painel frontal válido para criar o encaixe superior.',
     );
-
-    if (panel) {
-      return {
-        panel,
-        bounds: getPanelBounds(panel),
-      };
-    }
   }
 
-  const frontPanel = meshData.panels.find(
-    (panel) => panel.type === 'front',
-  );
-
-  if (frontPanel) {
-    return {
-      panel: frontPanel,
-      bounds: getPanelBounds(frontPanel),
-    };
-  }
-
-  throw new Error(
-    'CAIMENT: não foi encontrado um painel frontal válido para criar o encaixe superior.',
-  );
+  return {
+    panel: preferredPanel,
+    bounds: getPanelBounds(preferredPanel),
+  };
 }
 
-// ============================================================
-// OBTENÇÃO DE POSIÇÕES
-// ============================================================
-
-/**
- * Obtém o vértice real mais próximo de uma posição-alvo.
- *
- * A posição retornada pertence à geometria original.
- * Nenhuma coordenada é criada artificialmente.
- */
 function getNearestVertex(
   panel: GarmentPanel,
   target: THREE.Vector3,
@@ -175,8 +110,7 @@ function getNearestVertex(
   let minimumDistance = Infinity;
 
   for (const vertex of panel.vertices) {
-    const distance =
-      vertex.position.distanceToSquared(target);
+    const distance = vertex.position.distanceToSquared(target);
 
     if (distance < minimumDistance) {
       minimumDistance = distance;
@@ -193,23 +127,12 @@ function getNearestVertex(
   return nearest.clone();
 }
 
-/**
- * Localiza uma posição na região frontal da peça.
- *
- * ratioY representa a posição relativa entre a base e o topo
- * da geometria original.
- */
 function getFrontPosition(
   reference: PanelReference,
   ratioY: number,
 ): THREE.Vector3 {
   const { panel, bounds } = reference;
-
-  const ratio = THREE.MathUtils.clamp(
-    ratioY,
-    0,
-    1,
-  );
+  const ratio = THREE.MathUtils.clamp(ratioY, 0, 1);
 
   const targetY = THREE.MathUtils.lerp(
     bounds.min.y,
@@ -217,18 +140,15 @@ function getFrontPosition(
     ratio,
   );
 
-  const target = new THREE.Vector3(
-    bounds.center.x,
-    targetY,
-    bounds.max.z,
+  return getNearestVertex(
+    panel,
+    new THREE.Vector3(
+      bounds.center.x,
+      targetY,
+      bounds.max.z,
+    ),
   );
-
-  return getNearestVertex(panel, target);
 }
-
-// ============================================================
-// CENTRO DE PAINÉIS AUXILIARES
-// ============================================================
 
 function getPanelCenter(
   meshData: GarmentMeshData,
@@ -238,16 +158,10 @@ function getPanelCenter(
     (candidate) => candidate.id === panelId,
   );
 
-  if (!panel) {
-    return null;
-  }
+  if (!panel) return null;
 
   return getPanelBounds(panel).center.clone();
 }
-
-// ============================================================
-// ÂNCORAS
-// ============================================================
 
 function createAnchor(
   id: string,
@@ -263,72 +177,43 @@ function createAnchor(
   };
 }
 
-/**
- * Cria âncoras para regatas.
- *
- * Regatas não recebem âncoras artificiais de mangas ou braços.
- * Os ombros só são associados quando existem painéis reais
- * correspondentes.
- */
 function createTShirtAnchors(
   meshData: GarmentMeshData,
   reference: PanelReference,
 ): GarmentAnchor[] {
-  const anchors: GarmentAnchor[] = [];
-
-  const bust = getFrontPosition(
-    reference,
-    0.65,
-  );
-
-  const waist = getFrontPosition(
-    reference,
-    0.35,
-  );
-
-  anchors.push(
+  const anchors: GarmentAnchor[] = [
     createAnchor(
       'garment-bust',
       'bustCenter',
-      bust,
+      getFrontPosition(reference, 0.65),
       1.2,
     ),
     createAnchor(
       'garment-waist',
       'waistCenter',
-      waist,
-      1,
+      getFrontPosition(reference, 0.35),
     ),
-  );
+  ];
 
-  const leftSleeve = getPanelCenter(
-    meshData,
-    'leftSleeve',
-  );
+  const leftShoulder = getPanelCenter(meshData, 'leftSleeve');
+  const rightShoulder = getPanelCenter(meshData, 'rightSleeve');
 
-  const rightSleeve = getPanelCenter(
-    meshData,
-    'rightSleeve',
-  );
-
-  if (leftSleeve) {
+  if (leftShoulder) {
     anchors.push(
       createAnchor(
         'garment-left-shoulder',
         'leftShoulder',
-        leftSleeve,
-        1,
+        leftShoulder,
       ),
     );
   }
 
-  if (rightSleeve) {
+  if (rightShoulder) {
     anchors.push(
       createAnchor(
         'garment-right-shoulder',
         'rightShoulder',
-        rightSleeve,
-        1,
+        rightShoulder,
       ),
     );
   }
@@ -336,55 +221,28 @@ function createTShirtAnchors(
   return anchors;
 }
 
-/**
- * Cria âncoras para vestidos quando o gerador ainda não
- * forneceu uma definição própria.
- *
- * Quando o gerador já fornece âncoras, elas são preservadas.
- */
 function createDressAnchors(
   reference: PanelReference,
 ): GarmentAnchor[] {
-  const bust = getFrontPosition(
-    reference,
-    0.75,
-  );
-
-  const waist = getFrontPosition(
-    reference,
-    0.45,
-  );
-
-  const hip = getFrontPosition(
-    reference,
-    0,
-  );
-
   return [
     createAnchor(
       'garment-bust',
       'bustCenter',
-      bust,
+      getFrontPosition(reference, 0.75),
       1.2,
     ),
     createAnchor(
       'garment-waist',
       'waistCenter',
-      waist,
-      1,
+      getFrontPosition(reference, 0.45),
     ),
     createAnchor(
       'garment-hip',
       'hipCenter',
-      hip,
-      1,
+      getFrontPosition(reference, 0.2),
     ),
   ];
 }
-
-// ============================================================
-// COBERTURA ANATÔMICA
-// ============================================================
 
 function createCoverage(
   type: UpperBodyGarmentType,
@@ -416,20 +274,11 @@ function createCoverage(
     'abdomen',
   ];
 
-  if (hasLeftSleeve) {
-    coverage.push('leftArm');
-  }
-
-  if (hasRightSleeve) {
-    coverage.push('rightArm');
-  }
+  if (hasLeftSleeve) coverage.push('leftArm');
+  if (hasRightSleeve) coverage.push('rightArm');
 
   return coverage;
 }
-
-// ============================================================
-// FOLGA
-// ============================================================
 
 function resolveClearance(
   meshData: GarmentMeshData,
@@ -451,13 +300,12 @@ function resolveClearance(
     return requestedClearance;
   }
 
-  const configuredClearance =
-    meshData.fit?.clearance;
+  const configuredClearance = meshData.fit?.clearance;
 
   if (
     typeof configuredClearance === 'number' &&
     Number.isFinite(configuredClearance) &&
-    configuredClearance > 0
+    configuredClearance >= 0
   ) {
     return configuredClearance;
   }
@@ -465,14 +313,18 @@ function resolveClearance(
   return DEFAULT_UPPER_BODY_CLEARANCE;
 }
 
-// ============================================================
-// VALIDAÇÃO DAS ÂNCORAS EXISTENTES
-// ============================================================
+function validateAnchors(anchors: GarmentAnchor[]): void {
+  const ids = new Set<string>();
 
-function validateAnchors(
-  anchors: GarmentAnchor[],
-): void {
   for (const anchor of anchors) {
+    if (ids.has(anchor.id)) {
+      throw new Error(
+        `CAIMENT: a âncora "${anchor.id}" está duplicada.`,
+      );
+    }
+
+    ids.add(anchor.id);
+
     if (!isFiniteVector(anchor.garmentPosition)) {
       throw new Error(
         `CAIMENT: a âncora "${anchor.id}" possui uma posição inválida.`,
@@ -493,34 +345,70 @@ function validateAnchors(
   }
 }
 
-// ============================================================
-// CONSTRUTOR UNIVERSAL DO ENCAIXE SUPERIOR
-// ============================================================
-
 /**
- * Cria a definição de encaixe para regatas e vestidos.
+ * Gera regiões de contato usando as regiões já existentes no gerador.
  *
- * Responsabilidades:
- * - preservar âncoras já produzidas pelo gerador;
- * - criar âncoras quando não existem;
- * - validar os painéis utilizados;
- * - definir a cobertura anatômica;
- * - resolver a folga em metros;
- * - preservar propriedades adicionais do fit original.
- *
- * Não modifica os vértices da geometria.
- * Não aplica escala ou translação.
- * Não realiza deformação.
+ * Não transforma toda a cobertura em contato: somente regiões explicitamente
+ * classificadas como contato ou suporte recebem essa permissão.
  */
+function createContactRegions(
+  meshData: GarmentMeshData,
+  existingRegions: GarmentRegionDefinition[],
+): GarmentRegionDefinition[] {
+  const regions = [...existingRegions];
+
+  const existingIds = new Set(
+    regions.map((region) => region.id),
+  );
+
+  const totalVertices = meshData.panels.reduce(
+    (total, panel) => total + panel.vertices.length,
+    0,
+  );
+
+  // A região de contato só é criada quando existe uma região semântica
+  // específica que identifica os vértices que devem acompanhar o corpo.
+  for (const region of existingRegions) {
+    if (
+      region.role !== 'contact' &&
+      region.role !== 'support'
+    ) {
+      continue;
+    }
+
+    const contactId = `${region.id}-contact`;
+
+    if (existingIds.has(contactId)) continue;
+
+    const validIndices = region.vertexIndices.filter(
+      (index) =>
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < totalVertices,
+    );
+
+    if (!validIndices.length) continue;
+
+    regions.push({
+      ...region,
+      id: contactId,
+      name: `${region.name} — contato corporal`,
+      vertexIndices: [...validIndices],
+      role: 'contact',
+    });
+
+    existingIds.add(contactId);
+  }
+
+  return regions;
+}
+
 function createUpperBodyGarmentFit(
   type: UpperBodyGarmentType,
   meshData: GarmentMeshData,
   requestedClearance?: number,
 ): GarmentFitDefinition {
-  if (
-    type !== 'tshirt' &&
-    type !== 'dress'
-  ) {
+  if (type !== 'tshirt' && type !== 'dress') {
     throw new Error(
       `CAIMENT: tipo de roupa "${type}" não suportado pelo encaixe superior.`,
     );
@@ -537,21 +425,26 @@ function createUpperBodyGarmentFit(
   }
 
   const reference = getFrontReference(meshData);
-
   const existingFit = meshData.fit;
 
   const anchors =
     existingFit?.anchors?.length
       ? existingFit.anchors.map((anchor) => ({
           ...anchor,
-          garmentPosition:
-            anchor.garmentPosition.clone(),
+          garmentPosition: anchor.garmentPosition.clone(),
         }))
       : type === 'dress'
         ? createDressAnchors(reference)
         : createTShirtAnchors(meshData, reference);
 
   validateAnchors(anchors);
+
+  const existingRegions = existingFit?.regions ?? [];
+
+  const regions = createContactRegions(
+    meshData,
+    existingRegions,
+  );
 
   return {
     ...existingFit,
@@ -567,12 +460,14 @@ function createUpperBodyGarmentFit(
       meshData,
       requestedClearance,
     ),
+
+    regions,
+
+    supports: existingFit?.supports
+      ? [...existingFit.supports]
+      : [],
   };
 }
-
-// ============================================================
-// EXPORTAÇÃO
-// ============================================================
 
 export {
   DEFAULT_UPPER_BODY_CLEARANCE,

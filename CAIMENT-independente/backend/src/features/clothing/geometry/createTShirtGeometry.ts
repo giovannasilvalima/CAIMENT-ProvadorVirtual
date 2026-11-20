@@ -13,9 +13,7 @@ import {
 
 import { assembleGarment } from './assembleGarment';
 
-import {
-  createUpperBodyGarmentFit,
-} from './UpperBodyGarment';
+import { createUpperBodyGarmentFit } from './UpperBodyGarment';
 
 import {
   type GarmentMeshOptions,
@@ -29,12 +27,55 @@ import {
 const EPSILON = 1e-8;
 
 // ============================================================
+// TIPOS INTERNOS DA MODELAGEM
+// ============================================================
+
+interface TankTopLayout {
+  rows: number;
+  columns: number;
+
+  halfWidth: number;
+  halfDepth: number;
+  halfShoulder: number;
+
+  neckFrontHalfWidth: number;
+  neckBackHalfWidth: number;
+
+  neckFrontDepth: number;
+  neckBackDepth: number;
+
+  armholeFrontDepth: number;
+  armholeBackDepth: number;
+
+  armholeFrontStart: number;
+  armholeBackStart: number;
+
+  strapWidth: number;
+  strapSpacing: number;
+  strapFrontPosition: number;
+  strapBackPosition: number;
+
+  edgeLength: number;
+}
+
+interface WidthAnchor {
+  height: number;
+  halfWidth: number;
+}
+
+// ============================================================
 // VALIDAÇÃO
 // ============================================================
 
 function validateMeasurements(
   measurements: TShirtMeasurements,
 ): void {
+  if (!measurements || typeof measurements !== 'object') {
+    throw new Error(
+      'As medidas da regata devem ser fornecidas pela loja.',
+    );
+  }
+
   const required: Array<keyof TShirtMeasurements> = [
     'width',
     'height',
@@ -71,13 +112,11 @@ function validateMeasurements(
 
   if (measurements.neckWidth >= measurements.width) {
     throw new Error(
-      'A largura do decote deve ser menor que a largura total da regata.',
+      'A largura do decote deve ser menor que a largura da regata.',
     );
   }
 
-  const optionalPositiveFields: Array<
-    keyof TShirtMeasurements
-  > = [
+  const positiveFields: Array<keyof TShirtMeasurements> = [
     'chestCircumference',
     'waistCircumference',
     'hemCircumference',
@@ -100,12 +139,10 @@ function validateMeasurements(
     'armholeFinishWidth',
   ];
 
-  for (const key of optionalPositiveFields) {
+  for (const key of positiveFields) {
     const value = measurements[key];
 
-    if (value === undefined) {
-      continue;
-    }
+    if (value === undefined) continue;
 
     if (
       typeof value !== 'number' ||
@@ -113,19 +150,17 @@ function validateMeasurements(
       value <= 0
     ) {
       throw new Error(
-        `Medida opcional inválida na geração da regata: ${key}.`,
+        `Medida inválida na geração da regata: ${key}.`,
       );
     }
   }
 
-  const optionalPositionFields: Array<
-    keyof TShirtMeasurements
-  > = [
+  const positionFields: Array<keyof TShirtMeasurements> = [
     'strapPositionFront',
     'strapPositionBack',
   ];
 
-  for (const key of optionalPositionFields) {
+  for (const key of positionFields) {
     const value = measurements[key];
 
     if (
@@ -146,289 +181,70 @@ function validateMeasurements(
     measurements.strapWidth > measurements.shoulderWidth
   ) {
     throw new Error(
-      'A largura da alça não pode ultrapassar a largura dos ombros.',
+      'A largura das alças não pode ultrapassar a largura dos ombros.',
     );
   }
 
-  if (
-    measurements.bustHeight !== undefined &&
-    measurements.bustHeight > measurements.height
-  ) {
-    throw new Error(
-      'A altura do busto não pode ultrapassar a altura da regata.',
-    );
+  for (const key of [
+    'bustHeight',
+    'waistHeight',
+    'hemHeight',
+  ] as const) {
+    const value = measurements[key];
+
+    if (value !== undefined && value > measurements.height) {
+      throw new Error(
+        `A medida ${key} não pode ultrapassar a altura da regata.`,
+      );
+    }
   }
 
-  if (
-    measurements.waistHeight !== undefined &&
-    measurements.waistHeight > measurements.height
-  ) {
-    throw new Error(
-      'A altura da cintura não pode ultrapassar a altura da regata.',
-    );
-  }
+  for (const key of [
+    'necklineFrontWidth',
+    'necklineBackWidth',
+  ] as const) {
+    const value = measurements[key];
 
-  if (
-    measurements.hemHeight !== undefined &&
-    measurements.hemHeight > measurements.height
-  ) {
-    throw new Error(
-      'A altura da barra não pode ultrapassar a altura da regata.',
-    );
-  }
-
-  if (
-    measurements.necklineFrontWidth !== undefined &&
-    measurements.necklineFrontWidth >= measurements.shoulderWidth
-  ) {
-    throw new Error(
-      'A largura frontal do decote deve ser menor que a largura dos ombros.',
-    );
-  }
-
-  if (
-    measurements.necklineBackWidth !== undefined &&
-    measurements.necklineBackWidth >= measurements.shoulderWidth
-  ) {
-    throw new Error(
-      'A largura traseira do decote deve ser menor que a largura dos ombros.',
-    );
+    if (
+      value !== undefined &&
+      value >= measurements.shoulderWidth
+    ) {
+      throw new Error(
+        `A medida ${key} deve ser menor que a largura dos ombros.`,
+      );
+    }
   }
 }
 
 // ============================================================
-// LAYOUT
+// FUNÇÕES MATEMÁTICAS
 // ============================================================
 
-interface TankTopLayout {
-  rows: number;
-  columns: number;
-
-  neckStartColumn: number;
-  neckEndColumn: number;
-  neckEdgeVertexCount: number;
-
-  armholeStartFront: number;
-  armholeStartBack: number;
-
-  strapWidth: number;
-  collarThickness: number;
-
-  halfBody: number;
-  halfTop: number;
-  halfNeck: number;
-
-  frontNeckHalfWidth: number;
-  backNeckHalfWidth: number;
-
-  frontNeckDepth: number;
-  backNeckDepth: number;
-
-  edgeLength: number;
-}
-
-function clampHeight(
+function smooth(
+  start: number,
+  end: number,
   value: number,
-  height: number,
 ): number {
-  return THREE.MathUtils.clamp(
+  return THREE.MathUtils.smoothstep(
     value,
-    height * 0.05,
-    height * 0.9,
+    start,
+    end,
   );
 }
 
-function getArmholeStart(
-  measurements: TShirtMeasurements,
-  type: 'front' | 'back',
+function interpolate(
+  a: number,
+  b: number,
+  t: number,
 ): number {
-  const specificDepth =
-    type === 'front'
-      ? measurements.armholeFrontDepth
-      : measurements.armholeBackDepth;
-
-  const depth =
-    specificDepth ??
-    measurements.armholeDepth ??
-    measurements.height * 0.42;
-
-  const normalizedDepth = clampHeight(
-    depth,
-    measurements.height,
-  );
-
-  return THREE.MathUtils.clamp(
-    1 - normalizedDepth / measurements.height,
-    0.1,
-    0.9,
-  );
-}
-
-function getLayout(
-  measurements: TShirtMeasurements,
-  edgeLength: number,
-): TankTopLayout {
-  const rows = resolveSegments(
-    measurements.height,
-    edgeLength,
-    16,
-    64,
-  );
-
-  const columns = resolveSegments(
-    measurements.width,
-    edgeLength,
-    24,
-    80,
-    true,
-  );
-
-  const frontNeckWidth =
-    measurements.necklineFrontWidth ??
-    measurements.neckWidth;
-
-  const backNeckWidth =
-    measurements.necklineBackWidth ??
-    measurements.neckWidth;
-
-  const maximumNeckWidth = Math.max(
-    frontNeckWidth,
-    backNeckWidth,
-    measurements.neckWidth,
-  );
-
-  const neckRatio = THREE.MathUtils.clamp(
-    maximumNeckWidth / measurements.width,
-    0.02,
-    0.8,
-  );
-
-  const neckHalfSegments = THREE.MathUtils.clamp(
-    Math.round((columns * neckRatio) / 2),
-    2,
-    Math.floor(columns / 2) - 1,
-  );
-
-  const neckStartColumn =
-    Math.floor(columns / 2) - neckHalfSegments;
-
-  const neckEndColumn =
-    Math.floor(columns / 2) + neckHalfSegments;
-
-  const strapWidth =
-    measurements.strapWidth ??
-    (
-      measurements.shoulderWidth -
-      maximumNeckWidth
-    ) / 2;
-
-  const collarThickness = Math.max(
-    EPSILON,
-    Math.min(
-      measurements.width / columns,
-      measurements.height / rows,
-      maximumNeckWidth / 8,
-      measurements.necklineFinishWidth ??
-        measurements.width / columns,
-    ),
-  );
-
-  const frontNeckHalfWidth =
-    frontNeckWidth / 2;
-
-  const backNeckHalfWidth =
-    backNeckWidth / 2;
-
-  const frontNeckDepth =
-    measurements.frontNeckDepth ??
-    measurements.neckWidth * 0.5;
-
-  const backNeckDepth =
-    measurements.backNeckDepth ??
-    measurements.neckWidth * 0.275;
-
-  return {
-    rows,
-    columns,
-
-    neckStartColumn,
-    neckEndColumn,
-    neckEdgeVertexCount:
-      neckEndColumn - neckStartColumn + 1,
-
-    armholeStartFront: getArmholeStart(
-      measurements,
-      'front',
-    ),
-
-    armholeStartBack: getArmholeStart(
-      measurements,
-      'back',
-    ),
-
-    strapWidth,
-    collarThickness,
-
-    halfBody: measurements.width / 2,
-    halfTop: measurements.shoulderWidth / 2,
-    halfNeck: maximumNeckWidth / 2,
-
-    frontNeckHalfWidth,
-    backNeckHalfWidth,
-
-    frontNeckDepth,
-    backNeckDepth,
-
-    edgeLength,
-  };
-}
-
-function bodyVertexIndex(
-  row: number,
-  column: number,
-  layout: TankTopLayout,
-): number {
-  return row * (layout.columns + 1) + column;
-}
-
-// ============================================================
-// PERFIL DE LARGURA DO CORPO
-// ============================================================
-
-function getBaseBoundaryHalfWidth(
-  v: number,
-  layout: TankTopLayout,
-  type: 'front' | 'back',
-): number {
-  const armholeStart =
-    type === 'front'
-      ? layout.armholeStartFront
-      : layout.armholeStartBack;
-
-  if (v <= armholeStart) {
-    return layout.halfBody;
-  }
-
-  const progress = THREE.MathUtils.clamp(
-    (v - armholeStart) / (1 - armholeStart),
-    0,
-    1,
-  );
-
   return THREE.MathUtils.lerp(
-    layout.halfBody,
-    layout.halfTop,
-    progress * progress,
+    a,
+    b,
+    THREE.MathUtils.clamp(t, 0, 1),
   );
 }
 
-/**
- * Converte uma circunferência completa para a metade
- * usada no cálculo lateral da malha.
- *
- * A conversão acontece somente dentro do gerador.
- */
-function getHalfWidthFromCircumference(
+function circumferenceToHalfWidth(
   circumference: number | undefined,
 ): number | undefined {
   if (
@@ -442,328 +258,405 @@ function getHalfWidthFromCircumference(
   return circumference / 2;
 }
 
-/**
- * Calcula o perfil lateral da peça usando as medidas
- * de busto, cintura e barra quando estiverem disponíveis.
- *
- * As alturas são medidas a partir da barra inferior.
- */
-function getBoundaryHalfWidth(
-  v: number,
-  layout: TankTopLayout,
+// ============================================================
+// LAYOUT DA MODELAGEM
+// ============================================================
+
+function getLayout(
   measurements: TShirtMeasurements,
-  type: 'front' | 'back',
-): number {
-  const baseWidth = getBaseBoundaryHalfWidth(
-    v,
-    layout,
-    type,
+  edgeLength: number,
+): TankTopLayout {
+  const rows = resolveSegments(
+    measurements.height,
+    edgeLength,
+    24,
+    100,
   );
 
-  const hemHalfWidth =
-    getHalfWidthFromCircumference(
-      measurements.hemCircumference,
+  const columns = resolveSegments(
+    measurements.width,
+    edgeLength,
+    32,
+    120,
+    true,
+  );
+
+  const neckFrontWidth =
+    measurements.necklineFrontWidth ??
+    measurements.neckWidth;
+
+  const neckBackWidth =
+    measurements.necklineBackWidth ??
+    measurements.neckWidth;
+
+  const armholeFrontDepth =
+    measurements.armholeFrontDepth ??
+    measurements.armholeDepth ??
+    measurements.height * 0.42;
+
+  const armholeBackDepth =
+    measurements.armholeBackDepth ??
+    measurements.armholeDepth ??
+    measurements.height * 0.40;
+
+  const strapWidth =
+    measurements.strapWidth ??
+    Math.max(
+      EPSILON,
+      (measurements.shoulderWidth -
+        Math.max(neckFrontWidth, neckBackWidth)) / 2,
     );
 
-  const waistHalfWidth =
-    getHalfWidthFromCircumference(
+  const strapSpacing =
+    measurements.strapSpacing ??
+    measurements.shoulderWidth -
+      strapWidth * 2;
+
+  return {
+    rows,
+    columns,
+
+    halfWidth: measurements.width / 2,
+    halfDepth: measurements.depth / 2,
+    halfShoulder: measurements.shoulderWidth / 2,
+
+    neckFrontHalfWidth: neckFrontWidth / 2,
+    neckBackHalfWidth: neckBackWidth / 2,
+
+    neckFrontDepth:
+      measurements.frontNeckDepth ??
+      measurements.neckWidth * 0.5,
+
+    neckBackDepth:
+      measurements.backNeckDepth ??
+      measurements.neckWidth * 0.275,
+
+    armholeFrontDepth,
+    armholeBackDepth,
+
+    armholeFrontStart: THREE.MathUtils.clamp(
+      1 - armholeFrontDepth / measurements.height,
+      0.05,
+      0.95,
+    ),
+
+    armholeBackStart: THREE.MathUtils.clamp(
+      1 - armholeBackDepth / measurements.height,
+      0.05,
+      0.95,
+    ),
+
+    strapWidth,
+    strapSpacing,
+
+    strapFrontPosition:
+      measurements.strapPositionFront ?? 0,
+
+    strapBackPosition:
+      measurements.strapPositionBack ?? 0,
+
+    edgeLength,
+  };
+}
+
+// ============================================================
+// MODELAGEM DO CONTORNO LATERAL
+// ============================================================
+
+function getWidthAnchors(
+  measurements: TShirtMeasurements,
+  layout: TankTopLayout,
+): WidthAnchor[] {
+  const anchors: WidthAnchor[] = [
+    {
+      height: 0,
+      halfWidth:
+        circumferenceToHalfWidth(
+          measurements.hemCircumference,
+        ) ?? layout.halfWidth,
+    },
+  ];
+
+  const waistWidth =
+    circumferenceToHalfWidth(
       measurements.waistCircumference,
     );
 
-  const chestHalfWidth =
-    getHalfWidthFromCircumference(
-      measurements.chestCircumference,
-    );
-
-  const anchors: Array<{
-    height: number;
-    halfWidth: number;
-  }> = [];
-
-  if (hemHalfWidth !== undefined) {
-    anchors.push({
-      height:
-        measurements.hemHeight ?? 0,
-      halfWidth: hemHalfWidth,
-    });
-  }
-
-  if (waistHalfWidth !== undefined) {
+  if (waistWidth !== undefined) {
     anchors.push({
       height:
         measurements.waistHeight ??
         measurements.height * 0.48,
-      halfWidth: waistHalfWidth,
+      halfWidth: waistWidth,
     });
   }
 
-  if (chestHalfWidth !== undefined) {
+  const bustWidth =
+    circumferenceToHalfWidth(
+      measurements.chestCircumference,
+    );
+
+  if (bustWidth !== undefined) {
     anchors.push({
       height:
         measurements.bustHeight ??
         measurements.height * 0.72,
-      halfWidth: chestHalfWidth,
+      halfWidth: bustWidth,
     });
-  }
-
-  if (anchors.length === 0) {
-    return baseWidth;
   }
 
   anchors.push({
     height: measurements.height,
-    halfWidth: layout.halfTop,
+    halfWidth: layout.halfShoulder,
   });
 
-  anchors.sort(
-    (a, b) => a.height - b.height,
-  );
+  anchors.sort((a, b) => a.height - b.height);
 
-  const currentHeight = v * measurements.height;
+  return anchors;
+}
 
-  if (currentHeight <= anchors[0].height) {
+function getPatternHalfWidth(
+  height: number,
+  anchors: WidthAnchor[],
+): number {
+  if (height <= anchors[0].height) {
     return anchors[0].halfWidth;
   }
 
-  for (
-    let index = 0;
-    index < anchors.length - 1;
-    index++
-  ) {
-    const current = anchors[index];
-    const next = anchors[index + 1];
+  for (let i = 0; i < anchors.length - 1; i++) {
+    const a = anchors[i];
+    const b = anchors[i + 1];
 
-    if (
-      currentHeight >= current.height &&
-      currentHeight <= next.height
-    ) {
-      const distance =
-        next.height - current.height;
+    if (height <= b.height) {
+      const distance = b.height - a.height;
 
-      const progress =
-        distance > EPSILON
-          ? THREE.MathUtils.clamp(
-              (currentHeight - current.height) /
-                distance,
-              0,
-              1,
-            )
-          : 0;
+      const t = distance > EPSILON
+        ? (height - a.height) / distance
+        : 0;
 
-      return THREE.MathUtils.lerp(
-        current.halfWidth,
-        next.halfWidth,
-        progress,
+      return interpolate(
+        a.halfWidth,
+        b.halfWidth,
+        t,
       );
     }
   }
 
-  return baseWidth;
+  return anchors[anchors.length - 1].halfWidth;
 }
 
 // ============================================================
-// POSIÇÃO HORIZONTAL DO TOPO
+// CONTORNO DA CAVA
 // ============================================================
 
-function getTopRowS(
-  column: number,
+function getArmholeBoundary(
+  v: number,
   layout: TankTopLayout,
+  type: 'front' | 'back',
 ): number {
-  const {
-    neckStartColumn,
-    neckEndColumn,
-    columns,
-  } = layout;
+  const start =
+    type === 'front'
+      ? layout.armholeFrontStart
+      : layout.armholeBackStart;
 
-  if (column <= neckStartColumn) {
-    return THREE.MathUtils.lerp(
-      -layout.halfTop,
-      -layout.halfNeck,
-      column / neckStartColumn,
+  const depth =
+    type === 'front'
+      ? layout.armholeFrontDepth
+      : layout.armholeBackDepth;
+
+  const progress = smooth(start, 1, v);
+
+  const anatomicalCurve =
+    Math.sin(progress * Math.PI * 0.5);
+
+  const shoulderWidth =
+    layout.halfShoulder;
+
+  const bodyWidth =
+    layout.halfWidth;
+
+  const contour = interpolate(
+    bodyWidth,
+    shoulderWidth,
+    anatomicalCurve,
+  );
+
+  const depthInfluence =
+    THREE.MathUtils.clamp(
+      depth / (layout.edgeLength + depth),
+      0,
+      1,
     );
-  }
 
-  if (column <= neckEndColumn) {
-    return THREE.MathUtils.lerp(
-      -layout.halfNeck,
-      layout.halfNeck,
-      (column - neckStartColumn) /
-        (neckEndColumn - neckStartColumn),
-    );
-  }
-
-  return THREE.MathUtils.lerp(
-    layout.halfNeck,
-    layout.halfTop,
-    (column - neckEndColumn) /
-      (columns - neckEndColumn),
+  return interpolate(
+    contour,
+    shoulderWidth,
+    depthInfluence * progress * 0.15,
   );
 }
 
 // ============================================================
-// DECOTE
+// CONTORNO DO DECOTE
 // ============================================================
 
-function getNecklineDepth(
+function getNecklineBoundary(
+  x: number,
   layout: TankTopLayout,
   type: 'front' | 'back',
 ): number {
-  return type === 'front'
-    ? layout.frontNeckDepth
-    : layout.backNeckDepth;
-}
+  const halfNeck =
+    type === 'front'
+      ? layout.neckFrontHalfWidth
+      : layout.neckBackHalfWidth;
 
-function getNecklineHalfWidth(
-  layout: TankTopLayout,
-  type: 'front' | 'back',
-): number {
-  return type === 'front'
-    ? layout.frontNeckHalfWidth
-    : layout.backNeckHalfWidth;
-}
+  const depth =
+    type === 'front'
+      ? layout.neckFrontDepth
+      : layout.neckBackDepth;
 
-function getNeckDrop(
-  column: number,
-  layout: TankTopLayout,
-  type: 'front' | 'back',
-): number {
-  if (
-    column < layout.neckStartColumn ||
-    column > layout.neckEndColumn
-  ) {
+  const center = type === 'front'
+    ? layout.strapFrontPosition
+    : layout.strapBackPosition;
+
+  const distance = Math.abs(x - center);
+
+  if (distance >= halfNeck) {
     return 0;
   }
 
-  const progress =
-    (column - layout.neckStartColumn) /
-    (layout.neckEndColumn - layout.neckStartColumn);
+  const normalized =
+    distance / halfNeck;
 
-  const distance = Math.abs(
-    progress * 2 - 1,
+  const curve =
+    (1 + Math.cos(Math.PI * normalized)) / 2;
+
+  return depth * curve;
+}
+
+// ============================================================
+// PERFIL DE PROFUNDIDADE
+// ============================================================
+
+function getBodyDepth(
+  v: number,
+  measurements: TShirtMeasurements,
+  layout: TankTopLayout,
+): number {
+  const chestProgress = smooth(
+    layout.armholeFrontStart * 0.45,
+    layout.armholeFrontStart + 0.1,
+    v,
   );
 
-  const depth = getNecklineDepth(
-    layout,
-    type,
+  const waistHeight =
+    measurements.waistHeight ??
+    measurements.height * 0.48;
+
+  const waistProgress = smooth(
+    0,
+    waistHeight / measurements.height,
+    v,
   );
 
-  const width = getNecklineHalfWidth(
-    layout,
-    type,
-  );
+  const upperBodyReduction =
+    smooth(0.78, 1, v);
 
-  const widthFactor = THREE.MathUtils.clamp(
-    width / layout.halfNeck,
-    0.1,
-    1,
-  );
+  const depthProfile =
+    0.88 +
+    chestProgress * 0.12 -
+    waistProgress * 0.08;
 
-  return (
-    depth *
-    widthFactor *
-    (1 + Math.cos(Math.PI * distance)) /
-    2
+  return Math.max(
+    EPSILON,
+    layout.halfDepth *
+      depthProfile *
+      (1 - upperBodyReduction * 0.16),
   );
 }
 
 // ============================================================
-// PAINÉIS FRONTAL E TRASEIRO
+// SUPERFÍCIE PARAMÉTRICA
 // ============================================================
 
-function createBodyPanel(
+function createPanelSurface(
   type: 'front' | 'back',
   measurements: TShirtMeasurements,
   layout: TankTopLayout,
 ): GarmentPanel {
-  const { rows, columns } = layout;
+  const positions: THREE.Vector3[] = [];
+
+  const anchors = getWidthAnchors(
+    measurements,
+    layout,
+  );
 
   const sign = type === 'front' ? 1 : -1;
 
-  const armholeStart =
-    type === 'front'
-      ? layout.armholeStartFront
-      : layout.armholeStartBack;
+  for (let row = 0; row <= layout.rows; row++) {
+    const v = row / layout.rows;
 
-  const topS = Array.from(
-    { length: columns + 1 },
-    (_, column) => getTopRowS(column, layout),
-  );
+    const y = v * measurements.height;
 
-  const positions: THREE.Vector3[] = [];
+    const patternHalfWidth = getPatternHalfWidth(
+      y,
+      anchors,
+    );
 
-  for (let row = 0; row <= rows; row++) {
-    const v = row / rows;
-
-    const halfWidth = getBoundaryHalfWidth(
+    const armholeHalfWidth = getArmholeBoundary(
       v,
       layout,
-      measurements,
       type,
     );
 
-    const lift = THREE.MathUtils.smoothstep(
+    const halfWidth = Math.min(
+      patternHalfWidth,
+      armholeHalfWidth,
+    );
+
+    const depth = getBodyDepth(
       v,
-      armholeStart,
-      1,
+      measurements,
+      layout,
+    );
+
+    const wrap = createWrapMapper(
+      halfWidth * 2,
+      depth,
     );
 
     for (
       let column = 0;
-      column <= columns;
+      column <= layout.columns;
       column++
     ) {
-      const uniform =
-        (2 * column) / columns - 1;
+      const u = column / layout.columns;
 
-      const target =
-        topS[column] / layout.halfTop;
+      const normalizedX = u * 2 - 1;
 
-      const s =
-        THREE.MathUtils.lerp(
-          uniform,
-          target,
-          lift,
-        ) * halfWidth;
+      const x = normalizedX * halfWidth;
 
-      const neckDrop = getNeckDrop(
-        column,
+      const neckDrop = getNecklineBoundary(
+        x,
         layout,
         type,
       );
 
-      const y =
-        v * measurements.height -
-        neckDrop * lift;
-
-      const effectiveV = THREE.MathUtils.clamp(
-        y / measurements.height,
-        0,
+      const topInfluence = smooth(
+        0.75,
         1,
+        v,
       );
 
-      const depthProgress =
-        THREE.MathUtils.smoothstep(
-          effectiveV,
-          armholeStart,
-          1,
-        );
+      const finalY =
+        y - neckDrop * topInfluence;
 
-      const halfDepth =
-        (measurements.depth / 2) *
-        (1 - depthProgress);
-
-      const wrap = createWrapMapper(
-        2 * halfWidth,
-        Math.max(halfDepth, EPSILON),
-      );
-
-      const point = wrap.map(s);
+      const mapped = wrap.map(x);
 
       positions.push(
         new THREE.Vector3(
-          point.x,
-          y,
-          sign * point.z,
+          mapped.x,
+          finalY,
+          sign * Math.abs(mapped.z),
         ),
       );
     }
@@ -773,23 +666,35 @@ function createBodyPanel(
     id: `tank-top-${type}`,
     name:
       type === 'front'
-        ? 'Painel frontal da regata'
-        : 'Painel traseiro da regata',
+        ? 'Modelagem frontal da regata'
+        : 'Modelagem traseira da regata',
     type,
     positions,
     triangles: createGridTriangles(
-      rows,
-      columns,
+      layout.rows,
+      layout.columns,
       type === 'front',
     ),
   });
 }
 
 // ============================================================
-// PAINEL DE ACABAMENTO DO DECOTE
+// ÍNDICES
 // ============================================================
 
-function createCollarPanel(
+function vertexIndex(
+  row: number,
+  column: number,
+  layout: TankTopLayout,
+): number {
+  return row * (layout.columns + 1) + column;
+}
+
+// ============================================================
+// ACABAMENTO DO DECOTE
+// ============================================================
+
+function createNecklinePanel(
   front: GarmentPanel,
   back: GarmentPanel,
   layout: TankTopLayout,
@@ -797,16 +702,58 @@ function createCollarPanel(
   const positions: THREE.Vector3[] = [];
   const triangles: GarmentTriangle[] = [];
 
-  const innerBoundary: THREE.Vector3[] = [];
+  const centerColumn = Math.floor(
+    layout.columns / 2,
+  );
 
-  for (
-    let column = layout.neckStartColumn;
-    column <= layout.neckEndColumn;
-    column++
-  ) {
-    innerBoundary.push(
+  const frontCount = Math.max(
+    2,
+    Math.round(
+      layout.neckFrontHalfWidth /
+      layout.halfWidth *
+      layout.columns,
+    ),
+  );
+
+  const backCount = Math.max(
+    2,
+    Math.round(
+      layout.neckBackHalfWidth /
+      layout.halfWidth *
+      layout.columns,
+    ),
+  );
+
+  const frontStart = THREE.MathUtils.clamp(
+    centerColumn - frontCount,
+    0,
+    layout.columns,
+  );
+
+  const frontEnd = THREE.MathUtils.clamp(
+    centerColumn + frontCount,
+    0,
+    layout.columns,
+  );
+
+  const backStart = THREE.MathUtils.clamp(
+    centerColumn - backCount,
+    0,
+    layout.columns,
+  );
+
+  const backEnd = THREE.MathUtils.clamp(
+    centerColumn + backCount,
+    0,
+    layout.columns,
+  );
+
+  const boundary: THREE.Vector3[] = [];
+
+  for (let column = frontStart; column <= frontEnd; column++) {
+    boundary.push(
       front.vertices[
-        bodyVertexIndex(
+        vertexIndex(
           layout.rows,
           column,
           layout,
@@ -815,14 +762,10 @@ function createCollarPanel(
     );
   }
 
-  for (
-    let column = layout.neckEndColumn;
-    column >= layout.neckStartColumn;
-    column--
-  ) {
-    innerBoundary.push(
+  for (let column = backEnd; column >= backStart; column--) {
+    boundary.push(
       back.vertices[
-        bodyVertexIndex(
+        vertexIndex(
           layout.rows,
           column,
           layout,
@@ -831,70 +774,61 @@ function createCollarPanel(
     );
   }
 
-  const perimeterCount = innerBoundary.length;
+  const count = boundary.length;
 
-  for (const point of innerBoundary) {
+  if (count < 4) {
+    throw new Error(
+      'Não foi possível gerar o contorno do decote.',
+    );
+  }
+
+  const finishWidth = Math.min(
+    layout.edgeLength * 1.5,
+    layout.neckFrontDepth * 0.2,
+    layout.neckBackDepth * 0.3,
+  );
+
+  for (const point of boundary) {
     positions.push(point.clone());
   }
 
-  for (const point of innerBoundary) {
-    const direction = new THREE.Vector3(
+  for (const point of boundary) {
+    const outward = new THREE.Vector3(
       point.x,
       0,
       point.z,
     );
 
-    if (direction.lengthSq() > EPSILON) {
-      direction.normalize();
+    if (outward.lengthSq() > EPSILON) {
+      outward.normalize();
     } else {
-      direction.set(
-        0,
-        0,
-        point.z >= 0 ? 1 : -1,
-      );
+      outward.set(0, 0, point.z >= 0 ? 1 : -1);
     }
 
     positions.push(
       new THREE.Vector3(
-        point.x +
-          direction.x * layout.collarThickness,
-        point.y + layout.collarThickness,
-        point.z +
-          direction.z * layout.collarThickness,
+        point.x + outward.x * finishWidth,
+        point.y + finishWidth * 0.15,
+        point.z + outward.z * finishWidth,
       ),
     );
   }
 
-  for (
-    let index = 0;
-    index < perimeterCount;
-    index++
-  ) {
-    const next =
-      (index + 1) % perimeterCount;
+  for (let i = 0; i < count; i++) {
+    const next = (i + 1) % count;
 
-    if (
-      index === layout.neckEdgeVertexCount - 1 ||
-      index === perimeterCount - 1
-    ) {
-      continue;
-    }
-
-    const outerA =
-      perimeterCount + index;
-
-    const outerB =
-      perimeterCount + next;
+    const outerA = count + i;
+    const outerB = count + next;
 
     triangles.push(
-      { a: index, b: outerA, c: next },
-      { a: outerA, b: outerB, c: next },
+      { a: i, b: next, c: outerA },
+      { a: outerA, b: next, c: outerB },
     );
   }
 
   return createPanel({
-    id: 'tank-top-collar',
-    name: 'Acabamento do decote da regata',
+    id: 'tank-top-neckline',
+    name: 'Acabamento do decote',
     type: 'collar',
     positions,
     triangles,
@@ -902,20 +836,156 @@ function createCollarPanel(
 }
 
 // ============================================================
-// ÍNDICES GLOBAIS
+// COSTURAS
 // ============================================================
 
-function getGlobalVertexIndices(
-  panelOffset: number,
-  localIndices: number[],
-): number[] {
-  return localIndices.map(
-    (index) => panelOffset + index,
+function createSeams(
+  front: GarmentPanel,
+  back: GarmentPanel,
+  collar: GarmentPanel,
+  layout: TankTopLayout,
+): GarmentSeam[] {
+  const rows = layout.rows;
+  const columns = layout.columns;
+
+  const index = (
+    row: number,
+    column: number,
+  ) => vertexIndex(row, column, layout);
+
+  const sideEdge = (
+    side: 'left' | 'right',
+  ): number[] => {
+    const column = side === 'left' ? 0 : columns;
+
+    const result: number[] = [];
+
+    for (let row = 0; row <= rows; row++) {
+      result.push(index(row, column));
+    }
+
+    return result;
+  };
+
+  const shoulderLeft = Array.from(
+    { length: Math.max(2, Math.ceil(
+      layout.strapWidth /
+      (layout.halfWidth * 2 / columns),
+    )) + 1 },
+    (_, i) => i,
   );
+
+  const shoulderRight = shoulderLeft.map(
+    (column) => columns - column,
+  );
+
+  const shoulderEdges = (
+    columnsList: number[],
+  ) => ({
+    front: columnsList.map(
+      (column) => index(rows, column),
+    ),
+    back: columnsList.map(
+      (column) => index(rows, column),
+    ),
+  });
+
+  const leftShoulder = shoulderEdges(shoulderLeft);
+  const rightShoulder = shoulderEdges(shoulderRight);
+
+  const neckStart = Math.floor(
+    columns / 2 -
+    layout.neckFrontHalfWidth /
+    (layout.halfWidth * 2) * columns,
+  );
+
+  const neckEnd = Math.ceil(
+    columns / 2 +
+    layout.neckFrontHalfWidth /
+    (layout.halfWidth * 2) * columns,
+  );
+
+  const frontNeck = Array.from(
+    { length: neckEnd - neckStart + 1 },
+    (_, i) => index(rows, neckStart + i),
+  );
+
+  const collarFront = Array.from(
+    { length: frontNeck.length },
+    (_, i) => i,
+  );
+
+  const backNeck = Array.from(
+    { length: neckEnd - neckStart + 1 },
+    (_, i) => index(rows, neckEnd - i),
+  );
+
+  const collarBack = Array.from(
+    { length: backNeck.length },
+    (_, i) =>
+      frontNeck.length + i,
+  );
+
+  return [
+    {
+      id: 'seam-left-side',
+      name: 'Costura lateral esquerda',
+      panelAId: front.id,
+      panelBId: back.id,
+      edgeA: sideEdge('left'),
+      edgeB: sideEdge('left'),
+      stiffness: 1,
+    },
+    {
+      id: 'seam-right-side',
+      name: 'Costura lateral direita',
+      panelAId: front.id,
+      panelBId: back.id,
+      edgeA: sideEdge('right'),
+      edgeB: sideEdge('right'),
+      stiffness: 1,
+    },
+    {
+      id: 'seam-left-shoulder',
+      name: 'Alça e ombro esquerdo',
+      panelAId: front.id,
+      panelBId: back.id,
+      edgeA: leftShoulder.front,
+      edgeB: leftShoulder.back,
+      stiffness: 1,
+    },
+    {
+      id: 'seam-right-shoulder',
+      name: 'Alça e ombro direito',
+      panelAId: front.id,
+      panelBId: back.id,
+      edgeA: rightShoulder.front,
+      edgeB: rightShoulder.back,
+      stiffness: 1,
+    },
+    {
+      id: 'seam-neck-front',
+      name: 'Acabamento frontal do decote',
+      panelAId: front.id,
+      panelBId: collar.id,
+      edgeA: frontNeck,
+      edgeB: collarFront,
+      stiffness: 1,
+    },
+    {
+      id: 'seam-neck-back',
+      name: 'Acabamento traseiro do decote',
+      panelAId: back.id,
+      panelBId: collar.id,
+      edgeA: backNeck,
+      edgeB: collarBack,
+      stiffness: 1,
+    },
+  ];
 }
 
 // ============================================================
-// REFERÊNCIAS DE ENCAIXE
+// REFERÊNCIAS SEMÂNTICAS E DE ENCAIXE
 // ============================================================
 
 function createTankTopFit(
@@ -931,25 +1001,17 @@ function createTankTopFit(
     (panel) => panel.type === 'back',
   );
 
-  const collar = panels.find(
-    (panel) => panel.type === 'collar',
-  );
-
-  if (!front || !back || !collar) {
+  if (!front || !back) {
     throw new Error(
-      'Não foi possível construir as referências semânticas da regata.',
+      'Não foi possível criar as referências da regata.',
     );
   }
-
-  const { rows, columns } = layout;
 
   const frontOffset = 0;
   const backOffset = front.vertices.length;
 
-  const index = (
-    row: number,
-    column: number,
-  ) => bodyVertexIndex(row, column, layout);
+  const rows = layout.rows;
+  const columns = layout.columns;
 
   const allBodyVertices = [
     ...Array.from(
@@ -962,156 +1024,134 @@ function createTankTopFit(
     ),
   ];
 
-  const shoulderColumns = Math.max(
-    1,
-    Math.min(
-      layout.neckStartColumn,
-      Math.ceil(
-        layout.strapWidth /
-          (measurements.width / columns),
-      ),
+  const shoulderColumnCount = Math.max(
+    2,
+    Math.ceil(
+      layout.strapWidth /
+      (measurements.width / columns),
     ),
   );
 
   const leftShoulderColumns = Array.from(
-    { length: shoulderColumns + 1 },
+    { length: shoulderColumnCount + 1 },
     (_, i) => i,
   );
 
-  const rightShoulderColumns = Array.from(
-    { length: shoulderColumns + 1 },
-    (_, i) => columns - i,
+  const rightShoulderColumns = leftShoulderColumns.map(
+    (column) => columns - column,
   );
 
-  const bothPanels = (
-    row: number,
-    cols: number[],
+  const shoulderVertices = (
+    selectedColumns: number[],
   ) => [
-    ...cols.map(
+    ...selectedColumns.map(
       (column) =>
-        frontOffset + index(row, column),
+        frontOffset +
+        vertexIndex(rows, column, layout),
     ),
-    ...cols.map(
+    ...selectedColumns.map(
       (column) =>
-        backOffset + index(row, column),
+        backOffset +
+        vertexIndex(rows, column, layout),
     ),
   ];
 
-  const leftShoulderVertices = bothPanels(
-    rows,
+  const leftShoulder = shoulderVertices(
     leftShoulderColumns,
   );
 
-  const rightShoulderVertices = bothPanels(
-    rows,
+  const rightShoulder = shoulderVertices(
     rightShoulderColumns,
   );
 
-  const shoulderVertices = [
-    ...leftShoulderVertices,
-    ...rightShoulderVertices,
-  ];
+  const neckFrontStart = Math.floor(
+    columns / 2 -
+    layout.neckFrontHalfWidth /
+    measurements.width * columns,
+  );
 
-  // ----------------------------------------------------------
-  // DECOTE
-  // ----------------------------------------------------------
+  const neckFrontEnd = Math.ceil(
+    columns / 2 +
+    layout.neckFrontHalfWidth /
+    measurements.width * columns,
+  );
+
+  const neckBackStart = Math.floor(
+    columns / 2 -
+    layout.neckBackHalfWidth /
+    measurements.width * columns,
+  );
+
+  const neckBackEnd = Math.ceil(
+    columns / 2 +
+    layout.neckBackHalfWidth /
+    measurements.width * columns,
+  );
 
   const frontNeckVertices = Array.from(
-    { length: layout.neckEdgeVertexCount },
+    { length: neckFrontEnd - neckFrontStart + 1 },
     (_, i) =>
       frontOffset +
-      index(
-        rows,
-        layout.neckStartColumn + i,
-      ),
+      vertexIndex(rows, neckFrontStart + i, layout),
   );
 
   const backNeckVertices = Array.from(
-    { length: layout.neckEdgeVertexCount },
+    { length: neckBackEnd - neckBackStart + 1 },
     (_, i) =>
       backOffset +
-      index(
-        rows,
-        layout.neckEndColumn - i,
-      ),
+      vertexIndex(rows, neckBackEnd - i, layout),
   );
 
-  // ----------------------------------------------------------
-  // CAVAS
-  // ----------------------------------------------------------
-
-  const frontArmholeRows = Array.from(
-    {
-      length:
-        rows -
-        Math.floor(
-          layout.armholeStartFront * rows,
-        ) +
-        1,
-    },
-    (_, i) =>
-      Math.floor(
-        layout.armholeStartFront * rows,
-      ) + i,
+  const armholeStartFront = Math.floor(
+    layout.armholeFrontStart * rows,
   );
 
-  const backArmholeRows = Array.from(
-    {
-      length:
-        rows -
-        Math.floor(
-          layout.armholeStartBack * rows,
-        ) +
-        1,
-    },
-    (_, i) =>
-      Math.floor(
-        layout.armholeStartBack * rows,
-      ) + i,
+  const armholeStartBack = Math.floor(
+    layout.armholeBackStart * rows,
   );
 
-  const getArmholeVertices = (
+  const armholeVertices = (
     column: number,
   ) => [
-    ...frontArmholeRows.map(
-      (row) =>
-        frontOffset + index(row, column),
+    ...Array.from(
+      { length: rows - armholeStartFront + 1 },
+      (_, i) =>
+        frontOffset +
+        vertexIndex(
+          armholeStartFront + i,
+          column,
+          layout,
+        ),
     ),
-    ...backArmholeRows.map(
-      (row) =>
-        backOffset + index(row, column),
-    ),
-  ];
-
-  const leftArmholeVertices =
-    getArmholeVertices(0);
-
-  const rightArmholeVertices =
-    getArmholeVertices(columns);
-
-  // ----------------------------------------------------------
-  // BARRA
-  // ----------------------------------------------------------
-
-  const bottomHemLocal = Array.from(
-    { length: columns + 1 },
-    (_, column) => index(0, column),
-  );
-
-  const bottomHemVertices = [
-    ...getGlobalVertexIndices(
-      frontOffset,
-      bottomHemLocal,
-    ),
-    ...getGlobalVertexIndices(
-      backOffset,
-      bottomHemLocal,
+    ...Array.from(
+      { length: rows - armholeStartBack + 1 },
+      (_, i) =>
+        backOffset +
+        vertexIndex(
+          armholeStartBack + i,
+          column,
+          layout,
+        ),
     ),
   ];
 
-  // ----------------------------------------------------------
-  // REGIÕES SEMÂNTICAS
-  // ----------------------------------------------------------
+  const leftArmhole = armholeVertices(0);
+  const rightArmhole = armholeVertices(columns);
+
+  const hemVertices = [
+    ...Array.from(
+      { length: columns + 1 },
+      (_, column) =>
+        frontOffset +
+        vertexIndex(0, column, layout),
+    ),
+    ...Array.from(
+      { length: columns + 1 },
+      (_, column) =>
+        backOffset +
+        vertexIndex(0, column, layout),
+    ),
+  ];
 
   const regions: GarmentRegionDefinition[] = [
     {
@@ -1125,26 +1165,29 @@ function createTankTopFit(
       id: 'shoulder-support',
       name: 'Sustentação dos ombros',
       bodyRegion: 'shoulders',
-      vertexIndices: shoulderVertices,
+      vertexIndices: [
+        ...leftShoulder,
+        ...rightShoulder,
+      ],
       role: 'support',
     },
     {
       id: 'left-shoulder-support',
-      name: 'Sustentação do ombro esquerdo',
+      name: 'Alça esquerda',
       bodyRegion: 'shoulders',
-      vertexIndices: leftShoulderVertices,
+      vertexIndices: leftShoulder,
       role: 'support',
     },
     {
       id: 'right-shoulder-support',
-      name: 'Sustentação do ombro direito',
+      name: 'Alça direita',
       bodyRegion: 'shoulders',
-      vertexIndices: rightShoulderVertices,
+      vertexIndices: rightShoulder,
       role: 'support',
     },
     {
       id: 'neck-opening',
-      name: 'Abertura do pescoço',
+      name: 'Abertura do decote',
       bodyRegion: 'neck',
       vertexIndices: [
         ...frontNeckVertices,
@@ -1156,27 +1199,24 @@ function createTankTopFit(
       id: 'left-armhole-opening',
       name: 'Cava esquerda',
       bodyRegion: 'leftArm',
-      vertexIndices: leftArmholeVertices,
+      vertexIndices: leftArmhole,
       role: 'opening',
     },
     {
       id: 'right-armhole-opening',
       name: 'Cava direita',
       bodyRegion: 'rightArm',
-      vertexIndices: rightArmholeVertices,
+      vertexIndices: rightArmhole,
       role: 'opening',
     },
     {
       id: 'bottom-hem',
       name: 'Barra inferior',
       bodyRegion: 'abdomen',
-      vertexIndices: bottomHemVertices,
+      vertexIndices: hemVertices,
       role: 'hem',
     },
   ];
-
-  const frontStrapPosition =
-    measurements.strapPositionFront ?? 0;
 
   return {
     coverage: [
@@ -1192,8 +1232,7 @@ function createTankTopFit(
         id: 'left-shoulder',
         bodyLandmark: 'leftShoulder',
         garmentPosition: new THREE.Vector3(
-          -layout.halfTop +
-            frontStrapPosition,
+          -layout.halfShoulder,
           measurements.height,
           0,
         ),
@@ -1203,8 +1242,7 @@ function createTankTopFit(
         id: 'right-shoulder',
         bodyLandmark: 'rightShoulder',
         garmentPosition: new THREE.Vector3(
-          layout.halfTop +
-            frontStrapPosition,
+          layout.halfShoulder,
           measurements.height,
           0,
         ),
@@ -1234,184 +1272,6 @@ function createTankTopFit(
 }
 
 // ============================================================
-// COSTURAS
-// ============================================================
-
-function createSeams(
-  panels: GarmentPanel[],
-  layout: TankTopLayout,
-): GarmentSeam[] {
-  const front = panels.find(
-    (panel) => panel.type === 'front',
-  );
-
-  const back = panels.find(
-    (panel) => panel.type === 'back',
-  );
-
-  const collar = panels.find(
-    (panel) => panel.type === 'collar',
-  );
-
-  if (!front || !back || !collar) {
-    throw new Error(
-      'Não foi possível criar as costuras da regata.',
-    );
-  }
-
-  const { rows, columns } = layout;
-
-  const index = (
-    row: number,
-    column: number,
-  ) => bodyVertexIndex(row, column, layout);
-
-  const bodySideEdge = (
-    side: 'left' | 'right',
-    type: 'front' | 'back',
-  ): number[] => {
-    const column =
-      side === 'left' ? 0 : columns;
-
-    const armholeStart =
-      type === 'front'
-        ? layout.armholeStartFront
-        : layout.armholeStartBack;
-
-    const startRow = Math.floor(
-      armholeStart * rows,
-    );
-
-    const edge: number[] = [];
-
-    for (
-      let row = 0;
-      row <= startRow;
-      row++
-    ) {
-      edge.push(index(row, column));
-    }
-
-    return edge;
-  };
-
-  const leftShoulderEdge: number[] = [];
-  const rightShoulderEdge: number[] = [];
-
-  for (
-    let column = 0;
-    column <= layout.neckStartColumn;
-    column++
-  ) {
-    leftShoulderEdge.push(
-      index(rows, column),
-    );
-  }
-
-  for (
-    let column = layout.neckEndColumn;
-    column <= columns;
-    column++
-  ) {
-    rightShoulderEdge.push(
-      index(rows, column),
-    );
-  }
-
-  const frontNeckEdge: number[] = [];
-
-  for (
-    let column = layout.neckStartColumn;
-    column <= layout.neckEndColumn;
-    column++
-  ) {
-    frontNeckEdge.push(
-      index(rows, column),
-    );
-  }
-
-  const backNeckEdge: number[] = [];
-
-  for (
-    let column = layout.neckEndColumn;
-    column >= layout.neckStartColumn;
-    column--
-  ) {
-    backNeckEdge.push(
-      index(rows, column),
-    );
-  }
-
-  const collarFrontEdge = Array.from(
-    { length: layout.neckEdgeVertexCount },
-    (_, i) => i,
-  );
-
-  const collarBackEdge = Array.from(
-    { length: layout.neckEdgeVertexCount },
-    (_, i) =>
-      layout.neckEdgeVertexCount + i,
-  );
-
-  return [
-    {
-      id: 'seam-left-side',
-      name: 'Costura lateral esquerda',
-      panelAId: front.id,
-      panelBId: back.id,
-      edgeA: bodySideEdge('left', 'front'),
-      edgeB: bodySideEdge('left', 'back'),
-      stiffness: 1,
-    },
-    {
-      id: 'seam-right-side',
-      name: 'Costura lateral direita',
-      panelAId: front.id,
-      panelBId: back.id,
-      edgeA: bodySideEdge('right', 'front'),
-      edgeB: bodySideEdge('right', 'back'),
-      stiffness: 1,
-    },
-    {
-      id: 'seam-left-shoulder',
-      name: 'Alça e ombro esquerdo',
-      panelAId: front.id,
-      panelBId: back.id,
-      edgeA: leftShoulderEdge,
-      edgeB: [...leftShoulderEdge],
-      stiffness: 1,
-    },
-    {
-      id: 'seam-right-shoulder',
-      name: 'Alça e ombro direito',
-      panelAId: front.id,
-      panelBId: back.id,
-      edgeA: rightShoulderEdge,
-      edgeB: [...rightShoulderEdge],
-      stiffness: 1,
-    },
-    {
-      id: 'seam-collar-front',
-      name: 'Acabamento frontal do decote',
-      panelAId: front.id,
-      panelBId: collar.id,
-      edgeA: frontNeckEdge,
-      edgeB: collarFrontEdge,
-      stiffness: 1,
-    },
-    {
-      id: 'seam-collar-back',
-      name: 'Acabamento traseiro do decote',
-      panelAId: back.id,
-      panelBId: collar.id,
-      edgeA: backNeckEdge,
-      edgeB: collarBackEdge,
-      stiffness: 1,
-    },
-  ];
-}
-
-// ============================================================
 // CONSTRUTOR PRINCIPAL
 // ============================================================
 
@@ -1419,15 +1279,6 @@ export function createTShirtGeometry(
   measurements: TShirtMeasurements,
   options?: GarmentMeshOptions,
 ): THREE.Group {
-  if (
-    !measurements ||
-    typeof measurements !== 'object'
-  ) {
-    throw new Error(
-      'As medidas da regata devem ser fornecidas pela loja.',
-    );
-  }
-
   validateMeasurements(measurements);
 
   const edgeLength = resolveEdgeLength(options);
@@ -1437,19 +1288,27 @@ export function createTShirtGeometry(
     edgeLength,
   );
 
-  const front = createBodyPanel(
+  // ----------------------------------------------------------
+  // MODELAGEM FRONTAL E TRASEIRA
+  // ----------------------------------------------------------
+
+  const front = createPanelSurface(
     'front',
     measurements,
     layout,
   );
 
-  const back = createBodyPanel(
+  const back = createPanelSurface(
     'back',
     measurements,
     layout,
   );
 
-  const collar = createCollarPanel(
+  // ----------------------------------------------------------
+  // ACABAMENTO
+  // ----------------------------------------------------------
+
+  const collar = createNecklinePanel(
     front,
     back,
     layout,
@@ -1461,10 +1320,20 @@ export function createTShirtGeometry(
     collar,
   ];
 
+  // ----------------------------------------------------------
+  // COSTURAS
+  // ----------------------------------------------------------
+
   const seams = createSeams(
-    panels,
+    front,
+    back,
+    collar,
     layout,
   );
+
+  // ----------------------------------------------------------
+  // MALHA E REFERÊNCIAS
+  // ----------------------------------------------------------
 
   const initialFit = createTankTopFit(
     measurements,
@@ -1498,6 +1367,10 @@ export function createTShirtGeometry(
 
   meshData.fit = fit;
 
+  // ----------------------------------------------------------
+  // MONTAGEM
+  // ----------------------------------------------------------
+
   const group = assembleGarment(
     meshData,
   ).group;
@@ -1528,29 +1401,53 @@ export function createTShirtGeometry(
     },
 
     geometryParameters: {
-      armholeStartFront:
-        layout.armholeStartFront,
+      armholeFrontStart:
+        layout.armholeFrontStart,
 
-      armholeStartBack:
-        layout.armholeStartBack,
+      armholeBackStart:
+        layout.armholeBackStart,
+
+      armholeFrontDepth:
+        layout.armholeFrontDepth,
+
+      armholeBackDepth:
+        layout.armholeBackDepth,
 
       frontNeckDepth:
-        layout.frontNeckDepth,
+        layout.neckFrontDepth,
 
       backNeckDepth:
-        layout.backNeckDepth,
+        layout.neckBackDepth,
 
       frontNeckHalfWidth:
-        layout.frontNeckHalfWidth,
+        layout.neckFrontHalfWidth,
 
       backNeckHalfWidth:
-        layout.backNeckHalfWidth,
+        layout.neckBackHalfWidth,
 
       strapWidth:
         layout.strapWidth,
 
-      collarThickness:
-        layout.collarThickness,
+      strapSpacing:
+        layout.strapSpacing,
+
+      strapFrontPosition:
+        layout.strapFrontPosition,
+
+      strapBackPosition:
+        layout.strapBackPosition,
+
+      bodyDepth:
+        layout.halfDepth,
+    },
+
+    geometryConstruction: {
+      method: 'parametric-pattern-surface',
+      independentFrontAndBack: true,
+      anatomicalWidthProfile: true,
+      independentNecklineProfiles: true,
+      variableBodyDepth: true,
+      semanticRegions: true,
     },
 
     coordinateSystem: {

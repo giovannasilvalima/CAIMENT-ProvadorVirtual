@@ -47,14 +47,6 @@ const products: Product[] = [
       'https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=900&q=85',
   },
   {
-    id: 3,
-    name: 'Vestido Serena',
-    category: 'Vestidos',
-    price: 289.9,
-    image:
-      'https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&w=900&q=85',
-  },
-  {
     id: 4,
     name: 'Short Casual',
     category: 'Shorts',
@@ -68,7 +60,6 @@ const categories = [
   'Todos',
   'Camisetas',
   'Calças',
-  'Vestidos',
   'Shorts',
 ];
 
@@ -89,7 +80,6 @@ export default function FitsenseCatalogPage() {
 
   const [cartCount, setCartCount] = useState(0);
 
-  // CARREGAR QUANTIDADE DO CARRINHO
   useEffect(() => {
     function updateCartCount() {
       try {
@@ -122,8 +112,6 @@ export default function FitsenseCatalogPage() {
     updateCartCount();
 
     window.addEventListener('storage', updateCartCount);
-
-    // Atualiza o contador quando a página volta a ficar visível.
     window.addEventListener('focus', updateCartCount);
 
     return () => {
@@ -132,7 +120,6 @@ export default function FitsenseCatalogPage() {
     };
   }, []);
 
-  // FILTRAGEM E ORDENAÇÃO
   const filteredProducts = useMemo(() => {
     let result = [...products];
 
@@ -169,7 +156,6 @@ export default function FitsenseCatalogPage() {
     return result;
   }, [category, search, sort]);
 
-  // FAVORITOS
   function toggleFavorite(id: number) {
     setFavorites((current) =>
       current.includes(id)
@@ -180,12 +166,8 @@ export default function FitsenseCatalogPage() {
 
   return (
     <div className="min-h-screen bg-[#F8F7F4] text-[#171717]">
-
-      {/* HEADER */}
       <header className="sticky top-0 z-50 border-b border-black/5 bg-[#F8F7F4]/95 backdrop-blur-xl">
         <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-5 sm:px-8">
-
-          {/* LOGO */}
           <Link
             to="/fitsense"
             className="text-2xl font-semibold tracking-[-0.04em]"
@@ -193,7 +175,6 @@ export default function FitsenseCatalogPage() {
             FITSENSE
           </Link>
 
-          {/* MENU FUNCIONAL */}
           <nav className="hidden items-center gap-8 md:flex">
             <Link
               to="/fitsense"
@@ -210,19 +191,13 @@ export default function FitsenseCatalogPage() {
             </Link>
           </nav>
 
-          {/* AÇÕES */}
           <div className="flex items-center gap-2">
-
-            {/* CARRINHO */}
             <Link
               to="/fitsense/carrinho"
               aria-label="Carrinho"
               className="relative flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-black/5"
             >
-              <ShoppingBag
-                size={19}
-                strokeWidth={1.7}
-              />
+              <ShoppingBag size={19} strokeWidth={1.7} />
 
               {cartCount > 0 && (
                 <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#171717] px-1 text-[9px] font-semibold text-white">
@@ -230,16 +205,12 @@ export default function FitsenseCatalogPage() {
                 </span>
               )}
             </Link>
-
           </div>
         </div>
       </header>
 
       <main>
-
-        {/* TÍTULO */}
         <section className="mx-auto max-w-7xl px-5 pb-8 pt-12 sm:px-8 sm:pb-10 sm:pt-16">
-
           <p className="mb-3 text-xs font-semibold uppercase tracking-[0.25em] text-black/40">
             Fitsense collection
           </p>
@@ -253,17 +224,11 @@ export default function FitsenseCatalogPage() {
             como elas ficam em você com o provador virtual
             CAIMENT.
           </p>
-
         </section>
 
-        {/* BARRA DE BUSCA E ORDENAÇÃO */}
         <section className="mx-auto max-w-7xl px-5 sm:px-8">
-
           <div className="flex flex-col gap-3 sm:flex-row">
-
-            {/* PESQUISA */}
             <div className="relative flex-1">
-
               <Search
                 size={18}
                 strokeWidth={1.7}
@@ -291,10 +256,8 @@ export default function FitsenseCatalogPage() {
                   <X size={15} />
                 </button>
               )}
-
             </div>
 
-            {/* FILTROS MOBILE */}
             <button
               type="button"
               onClick={() =>
@@ -307,9 +270,7 @@ export default function FitsenseCatalogPage() {
               Filtros
             </button>
 
-            {/* ORDENAÇÃO DESKTOP */}
             <div className="relative hidden sm:block">
-
               <select
                 value={sort}
                 onChange={(event) =>
@@ -321,44 +282,30 @@ export default function FitsenseCatalogPage() {
                 <option value="relevancia">
                   Mais relevantes
                 </option>
-
                 <option value="menor-preco">
                   Menor preço
                 </option>
-
                 <option value="maior-preco">
                   Maior preço
                 </option>
-
-                <option value="nome">
-                  Nome
-                </option>
+                <option value="nome">Nome</option>
               </select>
 
               <ChevronDown
                 size={16}
                 className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"
               />
-
             </div>
-
           </div>
         </section>
 
-        {/* FILTROS POR CATEGORIA */}
         <section
           className={`mx-auto max-w-7xl px-5 sm:px-8 ${
-            mobileFiltersOpen
-              ? 'block'
-              : 'hidden sm:block'
+            mobileFiltersOpen ? 'block' : 'hidden sm:block'
           }`}
         >
-
           <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-black/5 bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:border-0 sm:bg-transparent sm:p-0">
-
-            {/* CATEGORIAS */}
             <div className="flex flex-wrap gap-2">
-
               {categories.map((item) => {
                 const active = category === item;
 
@@ -381,12 +328,9 @@ export default function FitsenseCatalogPage() {
                   </button>
                 );
               })}
-
             </div>
 
-            {/* ORDENAÇÃO MOBILE */}
             <div className="flex items-center gap-2 sm:hidden">
-
               <span className="text-xs text-black/40">
                 Ordenar:
               </span>
@@ -399,33 +343,17 @@ export default function FitsenseCatalogPage() {
                 aria-label="Ordenar produtos"
                 className="bg-transparent text-xs font-semibold outline-none"
               >
-                <option value="relevancia">
-                  Relevância
-                </option>
-
-                <option value="menor-preco">
-                  Menor preço
-                </option>
-
-                <option value="maior-preco">
-                  Maior preço
-                </option>
-
-                <option value="nome">
-                  Nome
-                </option>
+                <option value="relevancia">Relevância</option>
+                <option value="menor-preco">Menor preço</option>
+                <option value="maior-preco">Maior preço</option>
+                <option value="nome">Nome</option>
               </select>
-
             </div>
-
           </div>
         </section>
 
-        {/* RESULTADOS */}
         <section className="mx-auto max-w-7xl px-5 pb-20 pt-10 sm:px-8 sm:pt-12">
-
           <div className="mb-6 flex items-center justify-between">
-
             <p className="text-sm text-black/45">
               {filteredProducts.length}{' '}
               {filteredProducts.length === 1
@@ -441,27 +369,17 @@ export default function FitsenseCatalogPage() {
                 </span>
               </p>
             )}
-
           </div>
 
           {filteredProducts.length > 0 ? (
-
-            /* LISTA DE PRODUTOS */
             <div className="grid grid-cols-2 gap-x-3 gap-y-10 sm:grid-cols-3 sm:gap-x-5 lg:grid-cols-4">
-
               {filteredProducts.map((product) => {
                 const isFavorite =
                   favorites.includes(product.id);
 
                 return (
-                  <div
-                    key={product.id}
-                    className="group"
-                  >
-
-                    {/* IMAGEM E ACESSO AO PRODUTO */}
+                  <div key={product.id} className="group">
                     <div className="relative aspect-[3/4] overflow-hidden rounded-2xl bg-[#F0EEE9]">
-
                       <Link
                         to={`/fitsense/produtos/${product.id}`}
                         aria-label={`Ver ${product.name}`}
@@ -475,7 +393,6 @@ export default function FitsenseCatalogPage() {
                         />
                       </Link>
 
-                      {/* FAVORITOS */}
                       <button
                         type="button"
                         aria-label={
@@ -500,22 +417,18 @@ export default function FitsenseCatalogPage() {
                         />
                       </button>
 
-                      {/* ACESSO AO PRODUTO */}
                       <Link
                         to={`/fitsense/produtos/${product.id}`}
                         className="absolute bottom-3 left-3 rounded-full bg-white/90 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] backdrop-blur-md transition hover:bg-white"
                       >
                         Ver produto
                       </Link>
-
                     </div>
 
-                    {/* INFORMAÇÕES */}
                     <Link
                       to={`/fitsense/produtos/${product.id}`}
                       className="block pt-4"
                     >
-
                       <p className="text-[10px] uppercase tracking-[0.15em] text-black/40 sm:text-xs">
                         {product.category}
                       </p>
@@ -527,20 +440,13 @@ export default function FitsenseCatalogPage() {
                       <p className="mt-2 text-sm font-semibold">
                         {formatPrice(product.price)}
                       </p>
-
                     </Link>
-
                   </div>
                 );
               })}
-
             </div>
-
           ) : (
-
-            /* NENHUM RESULTADO */
             <div className="flex min-h-[350px] flex-col items-center justify-center rounded-3xl bg-white px-6 text-center">
-
               <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-[#F0EEE9]">
                 <Search size={22} />
               </div>
@@ -564,22 +470,14 @@ export default function FitsenseCatalogPage() {
               >
                 Limpar filtros
               </button>
-
             </div>
-
           )}
-
         </section>
       </main>
 
-      {/* FOOTER */}
       <footer className="border-t border-black/5 bg-[#F8F7F4]">
-
         <div className="mx-auto flex max-w-7xl flex-col gap-8 px-5 py-12 sm:px-8 md:flex-row md:items-center md:justify-between">
-
-          {/* IDENTIDADE */}
           <div>
-
             <p className="text-xl font-semibold tracking-[-0.04em]">
               FITSENSE
             </p>
@@ -587,12 +485,9 @@ export default function FitsenseCatalogPage() {
             <p className="mt-2 text-xs text-black/45">
               Moda que combina com você.
             </p>
-
           </div>
 
-          {/* LINKS FUNCIONAIS */}
           <div className="flex flex-wrap gap-6 text-xs font-medium text-black/60">
-
             <Link
               to="/fitsense"
               className="transition hover:text-black"
@@ -613,20 +508,14 @@ export default function FitsenseCatalogPage() {
             >
               Carrinho
             </Link>
-
           </div>
-
         </div>
 
-        {/* COPYRIGHT */}
         <div className="border-t border-black/5">
-
           <div className="mx-auto max-w-7xl px-5 py-5 text-xs text-black/35 sm:px-8">
             © 2026 Fitsense. Todos os direitos reservados.
           </div>
-
         </div>
-
       </footer>
     </div>
   );

@@ -29,6 +29,7 @@ import MeasurementsPage from '@/pages/Measurements/MeasurementsPage';
 import FittingRoomPage from '@/pages/FittingRoom/FittingRoomPage';
 import SettingsPage from '@/pages/Settings/SettingsPage';
 import HelpPage from '@/pages/Help/HelpPage';
+import PoliciesPage from '@/pages/Policies/PoliciesPage';
 
 interface ProtectedRouteProps {
   requireVerified?: boolean;
@@ -158,6 +159,13 @@ export default function App() {
                 <Route
                   path="/ajuda"
                   element={<HelpPage />}
+                />
+
+                {/* POLÍTICAS E DOCUMENTOS */}
+
+                <Route
+                  path="/politicas"
+                  element={<PoliciesPage />}
                 />
               </Route>
 

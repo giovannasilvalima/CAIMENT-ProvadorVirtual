@@ -2,7 +2,6 @@
 import {
   ChevronDown,
   CircleHelp,
-  FileText,
   LogOut,
   Menu,
   ShieldCheck,
@@ -353,30 +352,18 @@ export function Header({
               {/* Termos de uso */}
               <button
                 type="button"
-                disabled
-                title="Disponível em breve"
-                className="flex w-full cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-caiment-ink-soft opacity-60"
+                onClick={() => {
+                  setMenuOpen(false);
+                  navigate('/politicas');
+                }}
+                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-caiment-ink transition-colors hover:bg-caiment-purple-50"
               >
-                <FileText size={18} />
-                <span>Termos de uso</span>
-                <span className="ml-auto text-[10px]">
-                  Em breve
-                </span>
-              </button>
-
-              {/* Políticas de segurança e privacidade */}
-              <button
-                type="button"
-                disabled
-                title="Disponível em breve"
-                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-caiment-ink-soft opacity-60 cursor-not-allowed"
-              >
-                <ShieldCheck size={18} />
+                <ShieldCheck
+                  size={18}
+                  className="text-caiment-purple-600"
+                />
                 <span className="flex-1">
                   Políticas de segurança e privacidade
-                </span>
-                <span className="text-[10px]">
-                  Em breve
                 </span>
               </button>
             </div>

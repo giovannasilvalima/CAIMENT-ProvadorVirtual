@@ -23,23 +23,20 @@ import {
 } from './GarmentCommon';
 
 /**
- * Medidas compartilhadas de calças e shorts.
+ * ============================================================
+ * CAIMENT — GEOMETRIA DE CALÇAS E SHORTS
+ * ============================================================
  *
- * Todas as medidas lineares e circunferências
- * são recebidas em metros.
+ * As medidas são recebidas em metros.
  *
- * Circunferências representam a volta completa.
+ * A geometria é construída a partir das dimensões recebidas
+ * pela loja, sem dimensões corporais fixas.
  *
- * length:
- * - Calça: comprimento interno da perna.
- * - Short: comprimento interno até a barra.
- *
- * outseamLength:
- * comprimento externo da peça.
- *
- * thighHeight, kneeHeight e calfHeight:
- * alturas medidas a partir da barra.
+ * A montagem final compartilha os vértices das uniões:
+ * não depende de costuras físicas separadas para conectar
+ * as partes da peça.
  */
+
 export interface LowerBodyMeasurements {
   waistWidth: number;
   hipWidth: number;
@@ -93,6 +90,9 @@ type PanelRegion = 'leg' | 'hip';
 
 type NormalizedMeasurements = LowerBodyMeasurements;
 
+const MINIMUM_DIMENSION = 0.0001;
+const GEOMETRY_EPSILON = 1e-10;
+
 const LABELS: Record<
   LowerBodyKind,
   {
@@ -113,11 +113,10 @@ const LABELS: Record<
   },
 };
 
-const MINIMUM_DIMENSION = 0.0001;
+/* ============================================================
+ * VALIDAÇÃO
+ * ========================================================== */
 
-/**
- * Valida as medidas complementares.
- */
 function validateOptionalMeasurements(
   input: LowerBodyMeasurements,
   kind: LowerBodyKind,
@@ -151,9 +150,7 @@ function validateOptionalMeasurements(
   for (const name of optionalFields) {
     const value = input[name];
 
-    if (value === undefined) {
-      continue;
-    }
+    if (value === undefined) continue;
 
     if (
       typeof value !== 'number' ||
@@ -222,8 +219,7 @@ function validateOptionalMeasurements(
 
   if (
     input.outseamLength !== undefined &&
-    input.outseamLength <
-      maximumLegLength
+    input.outseamLength < maximumLegLength
   ) {
     throw new Error(
       'CAIMENT: o comprimento externo não pode ser menor que o comprimento interno da perna.',
@@ -233,8 +229,7 @@ function validateOptionalMeasurements(
   if (
     input.waistHeight !== undefined &&
     input.outseamLength !== undefined &&
-    input.waistHeight >
-      input.outseamLength
+    input.waistHeight > input.outseamLength
   ) {
     throw new Error(
       'CAIMENT: a altura da cintura não pode ultrapassar o comprimento externo.',
@@ -244,8 +239,7 @@ function validateOptionalMeasurements(
   if (
     input.waistbandHeight !== undefined &&
     input.outseamLength !== undefined &&
-    input.waistbandHeight >=
-      input.outseamLength
+    input.waistbandHeight >= input.outseamLength
   ) {
     throw new Error(
       'CAIMENT: a altura do cós não pode ser maior ou igual ao comprimento externo.',
@@ -254,8 +248,7 @@ function validateOptionalMeasurements(
 
   if (
     input.frontCrotchLength !== undefined &&
-    input.frontCrotchLength >=
-      maximumLegLength
+    input.frontCrotchLength >= maximumLegLength
   ) {
     throw new Error(
       'CAIMENT: o comprimento do gancho frontal não pode ultrapassar o comprimento da perna.',
@@ -264,8 +257,7 @@ function validateOptionalMeasurements(
 
   if (
     input.backCrotchLength !== undefined &&
-    input.backCrotchLength >=
-      maximumLegLength
+    input.backCrotchLength >= maximumLegLength
   ) {
     throw new Error(
       'CAIMENT: o comprimento do gancho traseiro não pode ultrapassar o comprimento da perna.',
@@ -274,8 +266,7 @@ function validateOptionalMeasurements(
 
   if (
     input.waistbandCircumference !== undefined &&
-    input.waistbandCircumference <
-      input.waistWidth
+    input.waistbandCircumference < input.waistWidth
   ) {
     throw new Error(
       'CAIMENT: a circunferência do cós não pode ser menor que a medida da cintura.',
@@ -283,15 +274,10 @@ function validateOptionalMeasurements(
   }
 }
 
-/**
- * Valida as medidas obrigatórias.
- */
 function validateMeasurements(
   input: LowerBodyMeasurements,
   kind: LowerBodyKind,
 ): NormalizedMeasurements {
-  const labels = LABELS[kind];
-
   const required: Array<
     keyof LowerBodyMeasurements
   > = [
@@ -315,14 +301,14 @@ function validateMeasurements(
       value <= 0
     ) {
       throw new Error(
-        `CAIMENT: medida inválida ${labels.invalidIn}: ${name} deve ser um número positivo recebido pela loja, em metros.`,
+        `CAIMENT: medida inválida ${LABELS[kind].invalidIn}: ${name} deve ser um número positivo recebido pela loja, em metros.`,
       );
     }
   }
 
   if (input.crotchDepth >= input.length) {
     throw new Error(
-      `CAIMENT: a profundidade do gancho deve ser menor que o comprimento ${labels.lengthOf}.`,
+      `CAIMENT: a profundidade do gancho deve ser menor que o comprimento ${LABELS[kind].lengthOf}.`,
     );
   }
 
@@ -349,9 +335,17 @@ function validateMeasurements(
   return { ...input };
 }
 
-/**
- * Recupera um vértice real de um painel.
- */
+/* ============================================================
+ * FUNÇÕES DE GEOMETRIA
+ * ========================================================== */
+
+function midpoint(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+): THREE.Vector3 {
+  return a.clone().add(b).multiplyScalar(0.5);
+}
+
 function getPanelVertex(
   panels: GarmentPanel[],
   panelId: string,
@@ -386,22 +380,6 @@ function getPanelVertex(
   return vertex.position.clone();
 }
 
-/**
- * Posição média entre dois vértices.
- */
-function midpoint(
-  a: THREE.Vector3,
-  b: THREE.Vector3,
-): THREE.Vector3 {
-  return a.clone().add(b).multiplyScalar(0.5);
-}
-
-/**
- * Converte uma altura física em linha da malha.
- *
- * A altura é relativa à região informada,
- * não à altura total de toda a peça.
- */
 function resolveRowFromHeight(
   height: number | undefined,
   regionBottom: number,
@@ -426,8 +404,7 @@ function resolveRowFromHeight(
   }
 
   const normalized =
-    (height - regionBottom) /
-    regionHeight;
+    (height - regionBottom) / regionHeight;
 
   return THREE.MathUtils.clamp(
     Math.round(normalized * rows),
@@ -436,10 +413,559 @@ function resolveRowFromHeight(
   );
 }
 
+function smoothInterpolate(
+  a: number,
+  b: number,
+  t: number,
+): number {
+  const clamped = THREE.MathUtils.clamp(
+    t,
+    0,
+    1,
+  );
+
+  const smooth =
+    clamped *
+    clamped *
+    (3 - 2 * clamped);
+
+  return THREE.MathUtils.lerp(
+    a,
+    b,
+    smooth,
+  );
+}
+
+/* ============================================================
+ * PERFIS DE CIRCUNFERÊNCIA
+ * ========================================================== */
+
+function getLegCircumferenceAt(
+  m: NormalizedMeasurements,
+  height: number,
+  totalLength: number,
+  kind: LowerBodyKind,
+): number {
+  const opening =
+    m.hemCircumference ??
+    (
+      kind === 'pants'
+        ? m.ankleCircumference
+        : undefined
+    ) ??
+    m.legOpening;
+
+  const thigh = m.thighWidth;
+
+  if (kind === 'short') {
+    const normalizedHeight =
+      height /
+      Math.max(
+        totalLength,
+        MINIMUM_DIMENSION,
+      );
+
+    return smoothInterpolate(
+      opening,
+      thigh,
+      normalizedHeight,
+    );
+  }
+
+  const calf =
+    m.calfCircumference ?? opening;
+
+  const knee =
+    m.kneeCircumference ?? thigh;
+
+  const calfHeight =
+    m.calfHeight ?? totalLength * 0.25;
+
+  const kneeHeight =
+    m.kneeHeight ?? totalLength * 0.5;
+
+  const thighHeight =
+    m.thighHeight ?? totalLength * 0.85;
+
+  if (height <= calfHeight) {
+    return smoothInterpolate(
+      opening,
+      calf,
+      height /
+        Math.max(
+          calfHeight,
+          MINIMUM_DIMENSION,
+        ),
+    );
+  }
+
+  if (height <= kneeHeight) {
+    return smoothInterpolate(
+      calf,
+      knee,
+      (height - calfHeight) /
+        Math.max(
+          kneeHeight - calfHeight,
+          MINIMUM_DIMENSION,
+        ),
+    );
+  }
+
+  if (height <= thighHeight) {
+    return smoothInterpolate(
+      knee,
+      thigh,
+      (height - kneeHeight) /
+        Math.max(
+          thighHeight - kneeHeight,
+          MINIMUM_DIMENSION,
+        ),
+    );
+  }
+
+  return thigh;
+}
+
+function getHipCircumferenceAt(
+  m: NormalizedMeasurements,
+  height: number,
+  crotchY: number,
+  waistY: number,
+): number {
+  const hip = m.hipWidth;
+
+  const waist =
+    m.waistbandCircumference ??
+    m.waistWidth;
+
+  const hipY =
+    m.hipHeight ??
+    crotchY +
+      (waistY - crotchY) * 0.55;
+
+  if (height <= hipY) {
+    const t =
+      (height - crotchY) /
+      Math.max(
+        hipY - crotchY,
+        MINIMUM_DIMENSION,
+      );
+
+    return smoothInterpolate(
+      m.thighWidth,
+      hip,
+      t,
+    );
+  }
+
+  const t =
+    (height - hipY) /
+    Math.max(
+      waistY - hipY,
+      MINIMUM_DIMENSION,
+    );
+
+  return smoothInterpolate(
+    hip,
+    waist,
+    t,
+  );
+}
+
+function getCrotchProjection(
+  m: NormalizedMeasurements,
+  face: PanelFace,
+): number {
+  const crotchLength =
+    face === 'front'
+      ? m.frontCrotchLength ?? m.crotchDepth
+      : m.backCrotchLength ?? m.crotchDepth;
+
+  return THREE.MathUtils.clamp(
+    Math.max(
+      m.crotchDepth,
+      crotchLength * 0.25,
+    ),
+    MINIMUM_DIMENSION,
+    Math.max(
+      m.depth,
+      m.crotchDepth,
+    ),
+  );
+}
+
+/* ============================================================
+ * UNIÃO TOPOLÓGICA DOS PAINÉIS
+ * ========================================================== */
+
 /**
- * Calcula os índices globais da região superior
- * que recebe o suporte do cós.
+ * Estrutura de retorno da união.
+ *
+ * oldToNew converte índices globais dos painéis originais
+ * para os índices do painel contínuo.
  */
+interface ContinuousSurfaceResult {
+  panel: GarmentPanel;
+  oldToNew: number[];
+}
+
+/**
+ * Une vértices de costuras usando conjuntos disjuntos.
+ *
+ * Diferentemente do comportamento de weldConstraints,
+ * os triângulos passam a referenciar os mesmos índices.
+ *
+ * O resultado é uma única malha topologicamente conectada.
+ */
+function mergePanelsIntoContinuousSurface(
+  panels: GarmentPanel[],
+  seams: GarmentSeam[],
+): ContinuousSurfaceResult {
+  if (panels.length === 0) {
+    throw new Error(
+      'CAIMENT: não existem painéis para formar a superfície da peça.',
+    );
+  }
+
+  const offsets = new Map<string, number>();
+
+  let totalVertices = 0;
+
+  for (const panel of panels) {
+    offsets.set(
+      panel.id,
+      totalVertices,
+    );
+
+    totalVertices += panel.vertices.length;
+  }
+
+  const parent = Array.from(
+    { length: totalVertices },
+    (_, index) => index,
+  );
+
+  const find = (value: number): number => {
+    let root = value;
+
+    while (parent[root] !== root) {
+      root = parent[root];
+    }
+
+    let current = value;
+
+    while (parent[current] !== current) {
+      const next = parent[current];
+      parent[current] = root;
+      current = next;
+    }
+
+    return root;
+  };
+
+  const union = (
+    a: number,
+    b: number,
+  ): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+
+    if (rootA !== rootB) {
+      parent[rootB] = rootA;
+    }
+  };
+
+  const panelById = new Map(
+    panels.map((panel) => [
+      panel.id,
+      panel,
+    ]),
+  );
+
+  /**
+   * Une as bordas correspondentes das costuras.
+   */
+  for (const seam of seams) {
+    const panelA = panelById.get(
+      seam.panelAId,
+    );
+
+    const panelB = panelById.get(
+      seam.panelBId,
+    );
+
+    const offsetA = offsets.get(
+      seam.panelAId,
+    );
+
+    const offsetB = offsets.get(
+      seam.panelBId,
+    );
+
+    if (
+      !panelA ||
+      !panelB ||
+      offsetA === undefined ||
+      offsetB === undefined
+    ) {
+      throw new Error(
+        `CAIMENT: não foi possível unir a costura "${seam.id}".`,
+      );
+    }
+
+    if (
+      seam.edgeA.length !== seam.edgeB.length ||
+      seam.edgeA.length < 2
+    ) {
+      throw new Error(
+        `CAIMENT: bordas incompatíveis na costura "${seam.id}".`,
+      );
+    }
+
+    for (
+      let index = 0;
+      index < seam.edgeA.length;
+      index++
+    ) {
+      const localA = seam.edgeA[index];
+      const localB = seam.edgeB[index];
+
+      if (
+        localA < 0 ||
+        localA >= panelA.vertices.length ||
+        localB < 0 ||
+        localB >= panelB.vertices.length
+      ) {
+        throw new Error(
+          `CAIMENT: índice inválido na costura "${seam.id}".`,
+        );
+      }
+
+      union(
+        offsetA + localA,
+        offsetB + localB,
+      );
+    }
+  }
+
+  /**
+   * Agrupa os vértices que representam o mesmo ponto.
+   */
+  const groups = new Map<
+    number,
+    {
+      position: THREE.Vector3;
+      count: number;
+    }
+  >();
+
+  for (
+    let globalIndex = 0;
+    globalIndex < totalVertices;
+    globalIndex++
+  ) {
+    const root = find(globalIndex);
+
+    const panel = panels.find(
+      (item) => {
+        const offset = offsets.get(item.id)!;
+
+        return (
+          globalIndex >= offset &&
+          globalIndex <
+            offset + item.vertices.length
+        );
+      },
+    );
+
+    if (!panel) {
+      throw new Error(
+        'CAIMENT: não foi possível recuperar um vértice durante a união.',
+      );
+    }
+
+    const offset = offsets.get(panel.id)!;
+
+    const localIndex =
+      globalIndex - offset;
+
+    const position =
+      panel.vertices[localIndex].position;
+
+    const group = groups.get(root);
+
+    if (group) {
+      group.position.add(position);
+      group.count++;
+    } else {
+      groups.set(root, {
+        position: position.clone(),
+        count: 1,
+      });
+    }
+  }
+
+  /**
+   * Cria os novos índices sem duplicar vértices soldados.
+   */
+  const rootToNew = new Map<number, number>();
+
+  const positions: THREE.Vector3[] = [];
+
+  for (const [root, group] of groups) {
+    const position = group.position
+      .clone()
+      .multiplyScalar(1 / group.count);
+
+    rootToNew.set(
+      root,
+      positions.length,
+    );
+
+    positions.push(position);
+  }
+
+  const oldToNew = new Array<number>(
+    totalVertices,
+  );
+
+  for (
+    let globalIndex = 0;
+    globalIndex < totalVertices;
+    globalIndex++
+  ) {
+    oldToNew[globalIndex] =
+      rootToNew.get(find(globalIndex))!;
+  }
+
+  /**
+   * Reconstrói os triângulos usando os índices compartilhados.
+   *
+   * Triângulos degenerados e duplicados são descartados.
+   */
+  const triangles: Array<{
+    a: number;
+    b: number;
+    c: number;
+  }> = [];
+
+  const triangleKeys = new Set<string>();
+
+  for (const panel of panels) {
+    const offset = offsets.get(panel.id)!;
+
+    for (const triangle of panel.triangles) {
+      const a = oldToNew[
+        offset + triangle.a
+      ];
+
+      const b = oldToNew[
+        offset + triangle.b
+      ];
+
+      const c = oldToNew[
+        offset + triangle.c
+      ];
+
+      if (
+        a === b ||
+        b === c ||
+        c === a
+      ) {
+        continue;
+      }
+
+      const pa = positions[a];
+      const pb = positions[b];
+      const pc = positions[c];
+
+      const areaVector = new THREE.Vector3()
+        .subVectors(pb, pa)
+        .cross(
+          new THREE.Vector3().subVectors(
+            pc,
+            pa,
+          ),
+        );
+
+      if (
+        areaVector.lengthSq() <=
+        GEOMETRY_EPSILON
+      ) {
+        continue;
+      }
+
+      const sorted = [a, b, c]
+        .sort((x, y) => x - y);
+
+      const key = sorted.join(':');
+
+      if (triangleKeys.has(key)) {
+        continue;
+      }
+
+      triangleKeys.add(key);
+
+      triangles.push({
+        a,
+        b,
+        c,
+      });
+    }
+  }
+
+  if (triangles.length === 0) {
+    throw new Error(
+      'CAIMENT: a união dos painéis não produziu triângulos válidos.',
+    );
+  }
+
+  const panel = createPanel({
+    id: 'lower-body-continuous-surface',
+    name: 'Superfície contínua da peça',
+    type: 'front',
+    positions,
+    triangles,
+  });
+
+  return {
+    panel,
+    oldToNew,
+  };
+}
+
+/**
+ * Atualiza os índices das regiões de encaixe após a união.
+ *
+ * Os índices de regiões são globais, portanto precisam
+ * acompanhar a nova numeração da malha.
+ */
+function remapFitRegions(
+  fit: GarmentFitDefinition,
+  oldToNew: number[],
+): GarmentFitDefinition {
+  return {
+    ...fit,
+
+    regions: fit.regions?.map((region) => ({
+      ...region,
+      vertexIndices: [
+        ...new Set(
+          region.vertexIndices
+            .map((index) => oldToNew[index])
+            .filter(
+              (index) => index !== undefined,
+            ),
+        ),
+      ],
+    })),
+  };
+}
+
+/* ============================================================
+ * CÓS E REGIÕES DE SUPORTE
+ * ========================================================== */
+
 function getWaistbandVertexIndices(
   panels: GarmentPanel[],
   hipRows: number,
@@ -503,10 +1029,10 @@ function getWaistbandVertexIndices(
   return indices;
 }
 
-/**
- * Cria as âncoras de encaixe a partir dos vértices
- * efetivamente gerados.
- */
+/* ============================================================
+ * ENCAIXE DA ROUPA
+ * ========================================================== */
+
 function createLowerBodyFit(
   kind: LowerBodyKind,
   measurements: NormalizedMeasurements,
@@ -755,168 +1281,10 @@ function createLowerBodyFit(
   };
 }
 
-/**
- * Interpolação suave entre duas medidas.
- */
-function smoothInterpolate(
-  a: number,
-  b: number,
-  t: number,
-): number {
-  const clamped = THREE.MathUtils.clamp(
-    t,
-    0,
-    1,
-  );
+/* ============================================================
+ * GERADOR PRINCIPAL
+ * ========================================================== */
 
-  const smooth =
-    clamped *
-    clamped *
-    (3 - 2 * clamped);
-
-  return THREE.MathUtils.lerp(
-    a,
-    b,
-    smooth,
-  );
-}
-
-/**
- * Retorna a circunferência da perna na altura
- * informada a partir da barra.
- *
- * Ordem dos pontos de controle:
- * barra/tornozelo -> panturrilha -> joelho -> coxa.
- *
- * Quando uma medida complementar não é recebida,
- * a interpolação usa os comprimentos disponíveis
- * como referência.
- */
-function getLegCircumferenceAt(
-  m: NormalizedMeasurements,
-  height: number,
-  totalLength: number,
-): number {
-  const opening =
-    m.hemCircumference ??
-    m.ankleCircumference ??
-    m.legOpening;
-
-  const calf =
-    m.calfCircumference ??
-    opening;
-
-  const knee =
-    m.kneeCircumference ??
-    m.thighWidth;
-
-  const thigh = m.thighWidth;
-
-  const calfHeight =
-    m.calfHeight ??
-    totalLength * 0.25;
-
-  const kneeHeight =
-    m.kneeHeight ??
-    totalLength * 0.5;
-
-  const thighHeight =
-    m.thighHeight ??
-    totalLength * 0.85;
-
-  if (height <= calfHeight) {
-    return smoothInterpolate(
-      opening,
-      calf,
-      height /
-        Math.max(
-          calfHeight,
-          MINIMUM_DIMENSION,
-        ),
-    );
-  }
-
-  if (height <= kneeHeight) {
-    return smoothInterpolate(
-      calf,
-      knee,
-      (height - calfHeight) /
-        Math.max(
-          kneeHeight - calfHeight,
-          MINIMUM_DIMENSION,
-        ),
-    );
-  }
-
-  if (height <= thighHeight) {
-    return smoothInterpolate(
-      knee,
-      thigh,
-      (height - kneeHeight) /
-        Math.max(
-          thighHeight - kneeHeight,
-          MINIMUM_DIMENSION,
-        ),
-    );
-  }
-
-  return thigh;
-}
-
-/**
- * Calcula a circunferência da região superior.
- *
- * Interpola a partir do quadril até a cintura.
- */
-function getHipCircumferenceAt(
-  m: NormalizedMeasurements,
-  height: number,
-  crotchY: number,
-  waistY: number,
-): number {
-  const hip = m.hipWidth;
-
-  const waist =
-    m.waistbandCircumference ??
-    m.waistWidth;
-
-  const hipY =
-    m.hipHeight ??
-    crotchY +
-      (waistY - crotchY) * 0.55;
-
-  if (height <= hipY) {
-    const t =
-      (height - crotchY) /
-      Math.max(
-        hipY - crotchY,
-        MINIMUM_DIMENSION,
-      );
-
-    return smoothInterpolate(
-      m.thighWidth,
-      hip,
-      t,
-    );
-  }
-
-  const t =
-    (height - hipY) /
-    Math.max(
-      waistY - hipY,
-      MINIMUM_DIMENSION,
-    );
-
-  return smoothInterpolate(
-    hip,
-    waist,
-    t,
-  );
-}
-
-/**
- * Cria a geometria universal de calças e shorts.
- */
 export function buildLowerBodyGarment(
   input: LowerBodyMeasurements,
   kind: LowerBodyKind,
@@ -946,7 +1314,7 @@ export function buildLowerBodyGarment(
     m.outseamLength ??
     maxLegLength + m.rise;
 
-  const waistY =
+  const baseWaistY =
     m.waistHeight ??
     outseamLength;
 
@@ -960,15 +1328,6 @@ export function buildLowerBodyGarment(
       ? m.frontRise ?? m.rise
       : m.backRise ?? m.rise;
 
-  const getCrotchLength = (
-    face: PanelFace,
-  ): number =>
-    face === 'front'
-      ? m.frontCrotchLength ??
-        m.crotchDepth
-      : m.backCrotchLength ??
-        m.crotchDepth;
-
   const getSideLength = (
     side: PanelSide,
   ): number =>
@@ -977,44 +1336,39 @@ export function buildLowerBodyGarment(
       : rightLength;
 
   const getWaistY = (
+    side: PanelSide,
     face: PanelFace,
   ): number => {
+    const sideLength =
+      getSideLength(side);
+
     const rise = getRise(face);
 
     return Math.max(
-      waistY + (rise - m.rise),
-      getSideLength('left') + rise,
-      getSideLength('right') + rise,
+      baseWaistY + (rise - m.rise),
+      sideLength + rise,
     );
   };
 
   const getCrotchY = (
     side: PanelSide,
-    face: PanelFace,
   ): number =>
-    getSideLength(side) -
-    getCrotchLength(face);
+    getSideLength(side);
 
-  const leftCrotchY = getCrotchY(
-    'left',
-    'front',
-  );
-
-  const rightCrotchY = getCrotchY(
-    'right',
-    'front',
-  );
+  const leftCrotchY = getCrotchY('left');
+  const rightCrotchY = getCrotchY('right');
 
   const averageWaistY =
-    (getWaistY('front') +
-      getWaistY('back')) /
-    2;
+    (
+      getWaistY('left', 'front') +
+      getWaistY('right', 'front') +
+      getWaistY('left', 'back') +
+      getWaistY('right', 'back')
+    ) / 4;
 
   const hipBottomY = Math.min(
     leftCrotchY,
     rightCrotchY,
-    getCrotchY('left', 'back'),
-    getCrotchY('right', 'back'),
   );
 
   const hipRegionHeight =
@@ -1029,7 +1383,7 @@ export function buildLowerBodyGarment(
   }
 
   const hipRows = resolveSegments(
-    hipRegionHeight,
+    hipRegionHeight + waistbandHeight,
     edgeLength,
     6,
     32,
@@ -1038,7 +1392,7 @@ export function buildLowerBodyGarment(
   const legRows = resolveSegments(
     maxLegLength,
     edgeLength,
-    12,
+    kind === 'short' ? 8 : 12,
     64,
   );
 
@@ -1058,18 +1412,11 @@ export function buildLowerBodyGarment(
     (m.legSeparation ??
       m.crotchWidth) / 2;
 
-  /**
-   * Converte circunferência completa em largura
-   * aproximada de um quarto da superfície.
-   */
   const quarter = (
     circumference: number,
   ): number =>
     circumference / 4;
 
-  /**
-   * Largura da perna em uma altura específica.
-   */
   const legWidthAt = (
     height: number,
     side: PanelSide,
@@ -1079,14 +1426,12 @@ export function buildLowerBodyGarment(
         m,
         height,
         getSideLength(side),
+        kind,
       );
 
     return quarter(circumference);
   };
 
-  /**
-   * Largura da região superior.
-   */
   const hipWidthAt = (
     height: number,
     crotchY: number,
@@ -1103,9 +1448,6 @@ export function buildLowerBodyGarment(
     return quarter(circumference);
   };
 
-  /**
-   * Profundidade da curvatura da superfície.
-   */
   const legBulge = (
     width: number,
   ): number =>
@@ -1115,7 +1457,10 @@ export function buildLowerBodyGarment(
     );
 
   /**
-   * Gera um painel de perna ou quadril.
+   * Gera cada superfície de construção.
+   *
+   * As superfícies são posteriormente unidas fisicamente
+   * na topologia da malha.
    */
   const createLegOrHipPanel = (
     id: string,
@@ -1140,23 +1485,27 @@ export function buildLowerBodyGarment(
       getSideLength(side);
 
     const localWaistY =
-      getWaistY(face);
-
-    const crotchLength =
-      getCrotchLength(face);
+      getWaistY(side, face);
 
     const crotchY =
-      sideLength - crotchLength;
+      getCrotchY(side);
 
     const rowBottomY =
       region === 'leg'
         ? 0
         : crotchY;
 
+    /**
+     * A extensão superior do painel forma a faixa
+     * física do cós quando a loja fornece waistbandHeight.
+     */
     const rowTopY =
       region === 'leg'
         ? crotchY
-        : localWaistY;
+        : localWaistY + waistbandHeight;
+
+    const crotchProjection =
+      getCrotchProjection(m, face);
 
     for (
       let row = 0;
@@ -1193,6 +1542,14 @@ export function buildLowerBodyGarment(
         legBulge(width),
       );
 
+      const torsoWrap =
+        region === 'hip'
+          ? createWrapMapper(
+              2 * width,
+              m.depth / 2,
+            )
+          : undefined;
+
       for (
         let column = 0;
         column <= columns;
@@ -1217,13 +1574,10 @@ export function buildLowerBodyGarment(
 
         let z = point.z;
 
-        if (region === 'hip') {
-          const torsoWrap =
-            createWrapMapper(
-              2 * width,
-              m.depth / 2,
-            );
-
+        if (
+          region === 'hip' &&
+          torsoWrap
+        ) {
           const torsoPoint =
             torsoWrap.map(
               (u - 1) * width,
@@ -1233,6 +1587,34 @@ export function buildLowerBodyGarment(
             torsoPoint.x - halfGap;
 
           z = torsoPoint.z;
+
+          /**
+           * Gancho anatômico:
+           *
+           * A extensão é mais evidente no centro,
+           * diminui em direção às laterais e desaparece
+           * progressivamente em direção à cintura.
+           *
+           * Frente e costas usam medidas independentes.
+           */
+          const centerFactor =
+            Math.pow(
+              Math.sin(Math.PI * u),
+              1.5,
+            );
+
+          const lowerRegionFactor =
+            Math.pow(
+              1 - p,
+              2,
+            );
+
+          const crotchExtension =
+            crotchProjection *
+            centerFactor *
+            lowerRegionFactor;
+
+          z += crotchExtension;
         }
 
         positions.push(
@@ -1260,10 +1642,10 @@ export function buildLowerBodyGarment(
     });
   };
 
-  /**
-   * Painéis independentes:
-   * frente e costas de cada perna e do quadril.
-   */
+  /* ----------------------------------------------------------
+   * SUPERFÍCIES DE CONSTRUÇÃO
+   * -------------------------------------------------------- */
+
   const panels: GarmentPanel[] = [
     createLegOrHipPanel(
       'front-left',
@@ -1272,6 +1654,7 @@ export function buildLowerBodyGarment(
       'left',
       'leg',
     ),
+
     createLegOrHipPanel(
       'back-left',
       'Costas da perna esquerda',
@@ -1279,6 +1662,7 @@ export function buildLowerBodyGarment(
       'left',
       'leg',
     ),
+
     createLegOrHipPanel(
       'front-right',
       'Frente da perna direita',
@@ -1286,6 +1670,7 @@ export function buildLowerBodyGarment(
       'right',
       'leg',
     ),
+
     createLegOrHipPanel(
       'back-right',
       'Costas da perna direita',
@@ -1293,6 +1678,7 @@ export function buildLowerBodyGarment(
       'right',
       'leg',
     ),
+
     createLegOrHipPanel(
       'hip-front-left',
       'Frente do quadril esquerdo',
@@ -1300,6 +1686,7 @@ export function buildLowerBodyGarment(
       'left',
       'hip',
     ),
+
     createLegOrHipPanel(
       'hip-back-left',
       'Costas do quadril esquerdo',
@@ -1307,6 +1694,7 @@ export function buildLowerBodyGarment(
       'left',
       'hip',
     ),
+
     createLegOrHipPanel(
       'hip-front-right',
       'Frente do quadril direito',
@@ -1314,6 +1702,7 @@ export function buildLowerBodyGarment(
       'right',
       'hip',
     ),
+
     createLegOrHipPanel(
       'hip-back-right',
       'Costas do quadril direito',
@@ -1324,19 +1713,14 @@ export function buildLowerBodyGarment(
   ];
 
   const panelMap = new Map(
-    panels.map(
-      (panel) => [
-        panel.id,
-        panel,
-      ],
-    ),
+    panels.map((panel) => [
+      panel.id,
+      panel,
+    ]),
   );
 
   const seams: GarmentSeam[] = [];
 
-  /**
-   * Registra uma costura entre dois painéis.
-   */
   const addSeam = (
     id: string,
     name: string,
@@ -1434,7 +1818,7 @@ export function buildLowerBodyGarment(
   }
 
   /**
-   * União da região do quadril com as pernas.
+   * União do quadril com cada perna.
    */
   const hipConnections = [
     ['hip-front-left', 'front-left'],
@@ -1455,7 +1839,7 @@ export function buildLowerBodyGarment(
   }
 
   /**
-   * Fechamento central frontal e traseiro.
+   * Fechamento frontal e traseiro do gancho.
    */
   addSeam(
     'center-front',
@@ -1496,9 +1880,10 @@ export function buildLowerBodyGarment(
     hipEdge(columns),
   );
 
-  /**
-   * Âncoras calculadas a partir da geometria final.
-   */
+  /* ----------------------------------------------------------
+   * ENCAIXE
+   * -------------------------------------------------------- */
+
   const fit = createLowerBodyFit(
     kind,
     m,
@@ -1508,27 +1893,46 @@ export function buildLowerBodyGarment(
     columns,
     hipBottomY,
     averageWaistY,
-    leftLength,
-    rightLength,
+    leftCrotchY,
+    rightCrotchY,
   );
 
-  const meshData: GarmentMeshData = {
-    panels,
-    seams,
+  /* ----------------------------------------------------------
+   * UNIÃO REAL DA TOPOLOGIA
+   * -------------------------------------------------------- */
 
-    vertexCount: panels.reduce(
-      (total, panel) =>
-        total + panel.vertices.length,
-      0,
-    ),
+  const continuous =
+    mergePanelsIntoContinuousSurface(
+      panels,
+      seams,
+    );
 
-    triangleCount: panels.reduce(
-      (total, panel) =>
-        total + panel.triangles.length,
-      0,
-    ),
-
+  const finalFit = remapFitRegions(
     fit,
+    continuous.oldToNew,
+  );
+
+  /**
+   * A montagem recebe apenas uma superfície.
+   *
+   * As uniões já compartilham índices de vértices,
+   * então não é necessário depender de costuras para
+   * aproximar partes independentes.
+   */
+  const meshData: GarmentMeshData = {
+    panels: [
+      continuous.panel,
+    ],
+
+    seams: [],
+
+    vertexCount:
+      continuous.panel.vertices.length,
+
+    triangleCount:
+      continuous.panel.triangles.length,
+
+    fit: finalFit,
   };
 
   const assembled =
@@ -1548,13 +1952,27 @@ export function buildLowerBodyGarment(
 
     meshData,
 
-    garmentFit: fit,
+    garmentFit: finalFit,
 
     meshResolution: {
       legRows,
       hipRows,
       columns,
       edgeLength,
+    },
+
+    topology: {
+      continuous: true,
+      panelCount: 1,
+      originalPanelCount: panels.length,
+      originalSeamCount: seams.length,
+      weldedVertices:
+        panels.reduce(
+          (total, panel) =>
+            total + panel.vertices.length,
+          0,
+        ) -
+        continuous.panel.vertices.length,
     },
 
     garmentRegions: {
@@ -1565,6 +1983,16 @@ export function buildLowerBodyGarment(
           m.waistWidth,
         finishWidth:
           m.waistbandFinishWidth,
+      },
+
+      crotch: {
+        depth: m.crotchDepth,
+        frontLength:
+          m.frontCrotchLength ??
+          m.crotchDepth,
+        backLength:
+          m.backCrotchLength ??
+          m.crotchDepth,
       },
 
       hem: {

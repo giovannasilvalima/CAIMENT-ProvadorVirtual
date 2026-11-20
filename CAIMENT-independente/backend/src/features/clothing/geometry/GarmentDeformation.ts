@@ -6,48 +6,29 @@ import type {
   BodyLandmarks,
   BodyRegion,
   GarmentFitDefinition,
+  GarmentRegionDefinition,
+  GarmentSupportDefinition,
 } from './types';
 
 export interface GarmentDeformationOptions {
-  /**
-   * Intensidade total da deformação.
-   * 0 = geometria original.
-   * 1 = deformação integral calculada.
-   */
+  /** 0 = geometria original; 1 = resultado completo. */
   strength?: number;
 
-  /**
-   * Raio máximo de influência das âncoras, em metros.
-   */
+  /** Raio máximo de influência das âncoras, em metros. */
   influenceRadius?: number;
 
-  /**
-   * Escala uniforme calculada pela altura real do usuário.
-   *
-   * Exemplo:
-   * avatar normalizado = 3.4 m
-   * usuário = 1.70 m
-   * escala = 3.4 / 1.70 = 2
-   *
-   * Não altera as proporções da roupa.
-   */
+  /** Escala uniforme calculada pela altura real do usuário. */
   uniformScale?: number;
 
   /**
-   * Corrige a posição de um ponto para afastá-lo
-   * da superfície corporal.
-   *
-   * Deve receber e devolver coordenadas no mesmo
-   * referencial da geometria.
+   * Retorna a posição corrigida na superfície corporal.
+   * A deformação utiliza somente X e Z dessa posição.
    */
   bodyCollision?: {
     resolve(position: THREE.Vector3): THREE.Vector3 | null;
   };
 
-  /**
-   * Mantidos por compatibilidade com chamadas antigas.
-   * Não são utilizados para calcular escala por eixo.
-   */
+  /** Mantidos por compatibilidade. */
   minScale?: number;
   maxScale?: number;
 }
@@ -73,42 +54,34 @@ interface Control {
 }
 
 interface RegionVertexMap {
+  id: string;
   bodyRegion: BodyRegion;
+  role: GarmentRegionDefinition['role'];
+  support?: GarmentSupportDefinition;
   vertices: Set<number>;
 }
 
 const EPSILON = 1e-8;
 const MIN_INFLUENCE = 1e-7;
 
-/**
- * Associação entre landmarks e regiões corporais.
- */
 const LANDMARK_REGIONS: Record<BodyLandmark, BodyRegion> = {
   bodyCenter: 'chest',
   neckBase: 'neck',
   shoulderCenter: 'shoulders',
-
   leftShoulder: 'shoulders',
   rightShoulder: 'shoulders',
-
   bustCenter: 'chest',
   waistCenter: 'waist',
   hipCenter: 'pelvis',
-
   leftHip: 'pelvis',
   rightHip: 'pelvis',
-
   crotchCenter: 'pelvis',
-
   leftKnee: 'leftLeg',
   rightKnee: 'rightLeg',
-
   leftAnkle: 'leftFoot',
   rightAnkle: 'rightFoot',
-
   leftElbow: 'leftArm',
   rightElbow: 'rightArm',
-
   leftWrist: 'leftForearm',
   rightWrist: 'rightForearm',
 };
@@ -135,9 +108,7 @@ function validateGeometry(
     !geometry ||
     !(geometry instanceof THREE.BufferGeometry)
   ) {
-    throw new Error(
-      'CAIMENT: geometria da roupa inválida.',
-    );
+    throw new Error('CAIMENT: geometria da roupa inválida.');
   }
 
   const position = geometry.getAttribute('position');
@@ -147,20 +118,36 @@ function validateGeometry(
     position.itemSize !== 3 ||
     position.count < 3
   ) {
-    throw new Error(
-      'CAIMENT: geometria sem vértices válidos.',
-    );
+    throw new Error('CAIMENT: geometria sem vértices válidos.');
   }
 
-  for (let index = 0; index < position.count; index++) {
+  for (let i = 0; i < position.count; i++) {
     if (
-      !Number.isFinite(position.getX(index)) ||
-      !Number.isFinite(position.getY(index)) ||
-      !Number.isFinite(position.getZ(index))
+      !Number.isFinite(position.getX(i)) ||
+      !Number.isFinite(position.getY(i)) ||
+      !Number.isFinite(position.getZ(i))
     ) {
       throw new Error(
-        `CAIMENT: vértice ${index} possui coordenadas inválidas.`,
+        `CAIMENT: vértice ${i} possui coordenadas inválidas.`,
       );
+    }
+  }
+
+  const index = geometry.getIndex();
+
+  if (index) {
+    for (let i = 0; i < index.count; i++) {
+      const vertexIndex = index.getX(i);
+
+      if (
+        !Number.isInteger(vertexIndex) ||
+        vertexIndex < 0 ||
+        vertexIndex >= position.count
+      ) {
+        throw new Error(
+          `CAIMENT: índice de geometria inválido na posição ${i}.`,
+        );
+      }
     }
   }
 }
@@ -178,21 +165,20 @@ function validate(
     !Array.isArray(fit.anchors) ||
     fit.anchors.length === 0
   ) {
-    throw new Error(
-      'CAIMENT: peça sem âncoras anatômicas.',
-    );
+    throw new Error('CAIMENT: peça sem âncoras anatômicas.');
   }
 
   if (
     !Number.isFinite(fit.clearance) ||
     fit.clearance < 0
   ) {
-    throw new Error(
-      'CAIMENT: folga da roupa inválida.',
-    );
+    throw new Error('CAIMENT: folga da roupa inválida.');
   }
 
-  if (!landmarks || !isFiniteVector(landmarks.bodyCenter)) {
+  if (
+    !landmarks ||
+    !isFiniteVector(landmarks.bodyCenter)
+  ) {
     throw new Error(
       'CAIMENT: centro corporal inválido ou ausente.',
     );
@@ -207,9 +193,7 @@ function validate(
       typeof anchor.id !== 'string' ||
       !anchor.id.trim()
     ) {
-      throw new Error(
-        'CAIMENT: âncora sem identificador válido.',
-      );
+      throw new Error('CAIMENT: âncora sem identificador válido.');
     }
 
     if (anchorIds.has(anchor.id)) {
@@ -226,9 +210,7 @@ function validate(
       );
     }
 
-    const bodyPoint = landmarks[anchor.bodyLandmark];
-
-    if (!isFiniteVector(bodyPoint)) {
+    if (!isFiniteVector(landmarks[anchor.bodyLandmark])) {
       throw new Error(
         `CAIMENT: landmark "${anchor.bodyLandmark}" ausente ou inválido.`,
       );
@@ -254,8 +236,36 @@ function validate(
       options.uniformScale <= 0
     )
   ) {
+    throw new Error('CAIMENT: escala uniforme inválida.');
+  }
+
+  if (
+    options.minScale !== undefined &&
+    (
+      !Number.isFinite(options.minScale) ||
+      options.minScale <= 0
+    )
+  ) {
+    throw new Error('CAIMENT: minScale inválido.');
+  }
+
+  if (
+    options.maxScale !== undefined &&
+    (
+      !Number.isFinite(options.maxScale) ||
+      options.maxScale <= 0
+    )
+  ) {
+    throw new Error('CAIMENT: maxScale inválido.');
+  }
+
+  if (
+    options.minScale !== undefined &&
+    options.maxScale !== undefined &&
+    options.minScale > options.maxScale
+  ) {
     throw new Error(
-      'CAIMENT: escala uniforme inválida.',
+      'CAIMENT: minScale não pode ser maior que maxScale.',
     );
   }
 
@@ -279,27 +289,30 @@ function validate(
       options.influenceRadius <= 0
     )
   ) {
-    throw new Error(
-      'CAIMENT: raio de influência inválido.',
-    );
+    throw new Error('CAIMENT: raio de influência inválido.');
   }
 
   if (fit.regions) {
+    const regionIds = new Set<string>();
+
     for (const region of fit.regions) {
       if (
         !region?.id ||
-        !Array.isArray(region.vertexIndices)
+        !Array.isArray(region.vertexIndices) ||
+        regionIds.has(region.id)
       ) {
         throw new Error(
-          'CAIMENT: definição de região da roupa inválida.',
+          'CAIMENT: definição de região da roupa inválida ou duplicada.',
         );
       }
 
-      for (const index of region.vertexIndices) {
+      regionIds.add(region.id);
+
+      for (const vertexIndex of region.vertexIndices) {
         if (
-          !Number.isInteger(index) ||
-          index < 0 ||
-          index >= position.count
+          !Number.isInteger(vertexIndex) ||
+          vertexIndex < 0 ||
+          vertexIndex >= position.count
         ) {
           throw new Error(
             `CAIMENT: índice de vértice inválido na região "${region.id}".`,
@@ -308,31 +321,46 @@ function validate(
       }
     }
   }
+
+  if (fit.supports) {
+    const regionIds = new Set(
+      (fit.regions ?? []).map((region) => region.id),
+    );
+
+    const supportIds = new Set<string>();
+
+    for (const support of fit.supports) {
+      if (
+        !support?.id ||
+        supportIds.has(support.id) ||
+        !regionIds.has(support.garmentRegionId) ||
+        !Number.isFinite(support.strength) ||
+        support.strength < 0 ||
+        support.strength > 1
+      ) {
+        throw new Error(
+          `CAIMENT: suporte da roupa "${support?.id ?? 'desconhecido'}" inválido.`,
+        );
+      }
+
+      supportIds.add(support.id);
+    }
+  }
 }
 
 // ============================================================
 // DIREÇÃO EXTERNA
 // ============================================================
 
-/**
- * Estima uma direção externa a partir do centro corporal.
- *
- * O resolvedor de colisão pode fornecer uma correção
- * mais precisa da superfície corporal.
- */
 function calculateOutwardDirection(
   bodyPoint: THREE.Vector3,
   bodyCenter: THREE.Vector3,
   garmentPosition: THREE.Vector3,
 ): THREE.Vector3 {
-  const direction = bodyPoint
-    .clone()
-    .sub(bodyCenter);
+  const direction = bodyPoint.clone().sub(bodyCenter);
 
   if (direction.lengthSq() <= EPSILON) {
-    direction
-      .copy(garmentPosition)
-      .sub(bodyCenter);
+    direction.copy(garmentPosition).sub(bodyCenter);
   }
 
   if (direction.lengthSq() <= EPSILON) {
@@ -343,7 +371,7 @@ function calculateOutwardDirection(
 }
 
 // ============================================================
-// REGIÕES DA GEOMETRIA
+// REGIÕES E SUPORTES
 // ============================================================
 
 function createRegionVertexMaps(
@@ -354,33 +382,86 @@ function createRegionVertexMaps(
   }
 
   return fit.regions.map((region) => ({
+    id: region.id,
     bodyRegion: region.bodyRegion,
+    role: region.role,
+    support: fit.supports?.find(
+      (support) => support.garmentRegionId === region.id,
+    ),
     vertices: new Set(region.vertexIndices),
   }));
 }
 
-function getVertexBodyRegion(
+function getVertexRegion(
   vertexIndex: number,
   regions: RegionVertexMap[],
-): BodyRegion | null {
+): RegionVertexMap | null {
+  // Regiões de contato têm prioridade sobre regiões genéricas.
+  let fallback: RegionVertexMap | null = null;
+
   for (const region of regions) {
-    if (region.vertices.has(vertexIndex)) {
-      return region.bodyRegion;
+    if (!region.vertices.has(vertexIndex)) {
+      continue;
     }
+
+    if (canResolveCollision(region)) {
+      return region;
+    }
+
+    fallback ??= region;
   }
 
-  return null;
+  return fallback;
+}
+
+function canFollowBody(region: RegionVertexMap): boolean {
+  if (region.support?.mode === 'hang') {
+    return false;
+  }
+
+  return (
+    region.role === 'contact' ||
+    region.support?.mode === 'contact' ||
+    region.support?.mode === 'wrap'
+  );
+}
+
+function canResolveCollision(region: RegionVertexMap): boolean {
+  if (region.support?.mode === 'hang') {
+    return false;
+  }
+
+  return (
+    region.role === 'contact' ||
+    region.support?.mode === 'contact' ||
+    region.support?.mode === 'wrap'
+  );
+}
+
+function getRegionInfluenceStrength(
+  region: RegionVertexMap,
+): number {
+  return region.support?.strength ?? 1;
 }
 
 // ============================================================
-// TRANSFORMAÇÃO UNIFORME
+// DISTÂNCIA HORIZONTAL
 // ============================================================
 
-/**
- * Calcula a translação global ponderada pelas âncoras.
- *
- * A escala permanece uniforme nos três eixos.
- */
+function calculateHorizontalDistanceSquared(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+): number {
+  const dx = a.x - b.x;
+  const dz = a.z - b.z;
+
+  return dx * dx + dz * dz;
+}
+
+// ============================================================
+// TRANSFORMAÇÃO GLOBAL
+// ============================================================
+
 function calculateTransform(
   controls: Control[],
   uniformScale: number,
@@ -395,52 +476,39 @@ function calculateTransform(
   );
 
   const translation = new THREE.Vector3();
-
   let totalWeight = 0;
 
   for (const control of controls) {
-    if (control.weight <= 0) {
-      continue;
-    }
+    if (control.weight <= 0) continue;
 
     const scaledSource = control.source
       .clone()
       .multiplyScalar(uniformScale);
 
-    const offset = control.target
-      .clone()
-      .sub(scaledSource);
+    const offset = control.target.clone().sub(scaledSource);
 
-    translation.addScaledVector(
-      offset,
-      control.weight,
-    );
-
+    translation.addScaledVector(offset, control.weight);
     totalWeight += control.weight;
   }
 
   if (totalWeight <= EPSILON) {
     throw new Error(
-      'CAIMENT: não existem pesos válidos para calcular o posicionamento.',
+      'CAIMENT: não existem pesos válidos para posicionar a roupa.',
     );
   }
 
   translation.divideScalar(totalWeight);
 
-  return {
-    scale,
-    translation,
-  };
+  return { scale, translation };
 }
 
 // ============================================================
-// CONTROLES DA DEFORMAÇÃO
+// CONTROLES ANATÔMICOS
 // ============================================================
 
 function createControls(
   fit: GarmentFitDefinition,
   landmarks: BodyLandmarks,
-  bodyCollision: GarmentDeformationOptions['bodyCollision'],
 ): Control[] {
   const controls: Control[] = [];
 
@@ -448,9 +516,7 @@ function createControls(
     const bodyPoint = landmarks[anchor.bodyLandmark];
     const weight = anchor.weight ?? 1;
 
-    if (weight <= 0) {
-      continue;
-    }
+    if (weight <= 0) continue;
 
     const direction = calculateOutwardDirection(
       bodyPoint,
@@ -460,26 +526,7 @@ function createControls(
 
     const target = bodyPoint
       .clone()
-      .addScaledVector(
-        direction,
-        fit.clearance,
-      );
-
-    if (bodyCollision) {
-      const projected = bodyCollision.resolve(
-        target.clone(),
-      );
-
-      if (projected !== null) {
-        if (!isFiniteVector(projected)) {
-          throw new Error(
-            `CAIMENT: resolvedor de colisão retornou posição inválida para a âncora "${anchor.id}".`,
-          );
-        }
-
-        target.copy(projected);
-      }
-    }
+      .addScaledVector(direction, fit.clearance);
 
     controls.push({
       id: anchor.id,
@@ -495,7 +542,7 @@ function createControls(
 
   if (controls.length === 0) {
     throw new Error(
-      'CAIMENT: nenhuma âncora possui peso positivo para deformação.',
+      'CAIMENT: nenhuma âncora possui peso positivo.',
     );
   }
 
@@ -506,15 +553,6 @@ function createControls(
 // INFLUÊNCIA LOCAL
 // ============================================================
 
-/**
- * Peso espacial com suporte limitado.
- *
- * Diferentemente da gaussiana anterior, a influência
- * desaparece completamente fora do raio definido.
- *
- * Isso evita que uma âncora altere partes distantes
- * da roupa.
- */
 function calculateSpatialInfluence(
   distanceSquared: number,
   radiusSquared: number,
@@ -532,49 +570,38 @@ function calculateSpatialInfluence(
 
   const remaining = 1 - normalizedDistance;
 
-  // Transição suave até o limite do raio.
   const smoothFalloff =
-    remaining * remaining *
-    (3 - 2 * remaining);
+    remaining * remaining * (3 - 2 * remaining);
 
-  // Maior influência nas proximidades da âncora.
-  const gaussian =
-    Math.exp(-4 * distanceSquared / radiusSquared);
+  const gaussian = Math.exp(
+    -4 * distanceSquared / radiusSquared,
+  );
 
   return smoothFalloff * gaussian;
 }
 
-/**
- * Calcula o deslocamento local de um vértice.
- *
- * Prioriza controles da região correspondente.
- * Quando não existem controles regionais, utiliza
- * os controles disponíveis, respeitando o raio espacial.
- */
 function calculateVertexResidual(
   position: THREE.Vector3,
   controls: Control[],
-  region: BodyRegion | null,
+  region: RegionVertexMap | null,
   radiusSquared: number,
 ): THREE.Vector3 {
-  const matchingControls = region
-    ? controls.filter(
-        (control) => control.bodyRegion === region,
-      )
-    : [];
-
-  const activeControls =
-    matchingControls.length > 0
-      ? matchingControls
-      : controls;
-
   const residual = new THREE.Vector3();
+
+  if (!region || !canFollowBody(region)) {
+    return residual;
+  }
 
   let influenceSum = 0;
 
-  for (const control of activeControls) {
+  for (const control of controls) {
+    if (control.bodyRegion !== region.bodyRegion) {
+      continue;
+    }
+
     const distanceSquared =
-      position.distanceToSquared(
+      calculateHorizontalDistanceSquared(
+        position,
         control.influencePosition,
       );
 
@@ -587,81 +614,99 @@ function calculateVertexResidual(
       continue;
     }
 
-    const influence =
-      spatialInfluence * control.weight;
+    const influence = spatialInfluence * control.weight;
 
-    residual.addScaledVector(
-      control.residual,
-      influence,
-    );
-
+    residual.addScaledVector(control.residual, influence);
     influenceSum += influence;
   }
 
   if (influenceSum > EPSILON) {
     residual.divideScalar(influenceSum);
+
+    residual.multiplyScalar(
+      getRegionInfluenceStrength(region),
+    );
+
+    // A deformação local não altera o comprimento vertical.
+    residual.y = 0;
   }
 
   return residual;
 }
 
 // ============================================================
+// COLISÃO
+// ============================================================
+
+function resolveHorizontalCollision(
+  candidate: THREE.Vector3,
+  resolver: GarmentDeformationOptions['bodyCollision'],
+): THREE.Vector3 | null {
+  if (!resolver) {
+    return null;
+  }
+
+  const projected = resolver.resolve(candidate.clone());
+
+  if (projected === null) {
+    return null;
+  }
+
+  if (!isFiniteVector(projected)) {
+    throw new Error(
+      'CAIMENT: resolvedor de colisão retornou posição inválida.',
+    );
+  }
+
+  const dx = projected.x - candidate.x;
+  const dz = projected.z - candidate.z;
+
+  if (dx * dx + dz * dz <= EPSILON) {
+    return null;
+  }
+
+  return new THREE.Vector3(
+    projected.x,
+    candidate.y,
+    projected.z,
+  );
+}
+
+// ============================================================
 // DEFORMAÇÃO PRINCIPAL
 // ============================================================
 
-/**
- * Deforma a geometria da roupa em relação aos landmarks
- * do avatar.
- *
- * A geometria original não é modificada.
- *
- * A escala uniforme preserva as proporções da peça.
- * A translação posiciona a roupa pelas âncoras.
- * A deformação local distribui os deslocamentos.
- *
- * A intensidade controla o resultado completo:
- * 0 = geometria original.
- * 1 = geometria posicionada e deformada.
- */
 export function applyGarmentDeformation(
   sourceGeometry: THREE.BufferGeometry,
   fit: GarmentFitDefinition,
   landmarks: BodyLandmarks,
   options: GarmentDeformationOptions = {},
 ): GarmentDeformationResult {
-  validate(
-    sourceGeometry,
-    fit,
-    landmarks,
-    options,
-  );
+  validate(sourceGeometry, fit, landmarks, options);
 
   const strength = options.strength ?? 1;
-  const uniformScale = options.uniformScale ?? 1;
+  const requestedScale = options.uniformScale ?? 1;
 
-  const sourcePosition =
-    sourceGeometry.getAttribute('position');
+  const uniformScale = THREE.MathUtils.clamp(
+    requestedScale,
+    options.minScale ?? 0.000001,
+    options.maxScale ?? Number.MAX_VALUE,
+  );
+
+  const sourcePosition = sourceGeometry.getAttribute(
+    'position',
+  ) as THREE.BufferAttribute;
 
   const sourceBounds = new THREE.Box3()
-    .setFromBufferAttribute(
-      sourcePosition as THREE.BufferAttribute,
-    );
+    .setFromBufferAttribute(sourcePosition);
 
   const diagonal = sourceBounds
     .getSize(new THREE.Vector3())
     .length();
 
-  const radius = options.influenceRadius ??
-    Math.max(diagonal * 0.34, 0.025);
-
-  if (
-    !Number.isFinite(radius) ||
-    radius <= 0
-  ) {
-    throw new Error(
-      'CAIMENT: raio de influência inválido.',
-    );
-  }
+  const radius =
+    options.influenceRadius ??
+    Math.max(diagonal * 0.25, 0.025);
 
   const radiusSquared = radius * radius;
 
@@ -672,19 +717,14 @@ export function applyGarmentDeformation(
   ) as THREE.BufferAttribute;
 
   const regions = createRegionVertexMaps(fit);
-
-  const controls = createControls(
-    fit,
-    landmarks,
-    options.bodyCollision,
-  );
+  const controls = createControls(fit, landmarks);
 
   const transform = calculateTransform(
     controls,
     uniformScale,
   );
 
-  // Coloca os controles no mesmo referencial da geometria.
+  // Converte os controles para o referencial final da roupa.
   for (const control of controls) {
     control.influencePosition
       .copy(control.source)
@@ -705,24 +745,21 @@ export function applyGarmentDeformation(
   let maximumDisplacement = 0;
   let totalDisplacement = 0;
   let deformedVertexCount = 0;
+  let collisionApplied = false;
+  let locallyDeformedVertexCount = 0;
 
   for (let index = 0; index < position.count; index++) {
-    original.fromBufferAttribute(
-      position,
-      index,
-    );
+    original.fromBufferAttribute(position, index);
 
-    // Transformação uniforme e posicionamento global.
+    // 1. Escala e posicionamento global.
     transformed
       .copy(original)
       .multiply(transform.scale)
       .add(transform.translation);
 
-    const vertexRegion = getVertexBodyRegion(
-      index,
-      regions,
-    );
+    const vertexRegion = getVertexRegion(index, regions);
 
+    // 2. Ajuste localizado somente nas regiões de contato.
     residual.copy(
       calculateVertexResidual(
         transformed,
@@ -732,40 +769,36 @@ export function applyGarmentDeformation(
       ),
     );
 
-    // Posição candidata com deformação local.
-    candidate
-      .copy(transformed)
-      .add(residual);
+    if (residual.lengthSq() > EPSILON) {
+      locallyDeformedVertexCount++;
+    }
 
-    // Colisão aplicada à posição candidata.
-    if (options.bodyCollision && strength > 0) {
-      const projected = options.bodyCollision.resolve(
-        candidate.clone(),
+    candidate.copy(transformed).add(residual);
+
+    // 3. Correção de colisão somente em regiões de contato.
+    if (
+      strength > 0 &&
+      options.bodyCollision &&
+      vertexRegion &&
+      canResolveCollision(vertexRegion)
+    ) {
+      const projected = resolveHorizontalCollision(
+        candidate,
+        options.bodyCollision,
       );
 
       if (projected !== null) {
-        if (!isFiniteVector(projected)) {
-          throw new Error(
-            `CAIMENT: resolvedor de colisão retornou posição inválida no vértice ${index}.`,
-          );
-        }
-
+        collisionApplied = true;
         candidate.copy(projected);
       }
     }
 
-    /*
-     * Mistura a geometria original com o resultado.
-     *
-     * Assim, strength = 0 preserva exatamente a geometria
-     * original, inclusive sem aplicar escala ou translação.
-     */
+    // 4. Intensidade final.
     finalPosition
       .copy(original)
       .lerp(candidate, strength);
 
-    const displacement =
-      finalPosition.distanceTo(original);
+    const displacement = finalPosition.distanceTo(original);
 
     if (displacement > EPSILON) {
       deformedVertexCount++;
@@ -801,20 +834,28 @@ export function applyGarmentDeformation(
     uniformScale,
     scale: transform.scale.toArray(),
     translation: transform.translation.toArray(),
-    collisionApplied: Boolean(options.bodyCollision),
-    regionalInfluenceApplied: regions.length > 0,
+    collisionApplied,
+    regionalInfluenceApplied:
+      locallyDeformedVertexCount > 0,
     localizedInfluence: true,
+    deformationAxes: ['x', 'z'],
+    preservedVerticalModeling: true,
+    collisionAxes: ['x', 'z'],
+    locallyDeformedVertexCount,
+    contactRegions: regions.filter(canResolveCollision).length,
+    bodyFollowingRegions: regions.filter(canFollowBody).length,
+    preservedHangRegions: regions.filter(
+      (region) => region.support?.mode === 'hang',
+    ).length,
+    supportCount: fit.supports?.length ?? 0,
   };
 
   return {
     geometry,
     deformedVertexCount,
     maximumDisplacement,
-
     averageDisplacement:
-      totalDisplacement /
-      Math.max(position.count, 1),
-
+      totalDisplacement / Math.max(position.count, 1),
     scale: transform.scale.clone(),
     translation: transform.translation.clone(),
   };
