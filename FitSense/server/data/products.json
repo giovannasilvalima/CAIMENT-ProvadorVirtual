@@ -7,11 +7,11 @@
     {
       "id": "1",
       "sku": "FS-CAM-001",
-      "name": "Regata Essential",
+      "name": "Polo Essential",
       "category": "upper",
-      "categoryLabel": "Regatas",
+      "categoryLabel": "Polos",
       "price": 129.9,
-      "description": "Regata de modelagem regular, decote redondo e tecido de algodão para uso cotidiano.",
+      "description": "Polo de modelagem regular, decote redondo e tecido de algodão para uso cotidiano.",
       "images": {
         "front": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRARn3b3kCMQvCKrCyXFlrL9FkHf6rkjJI6mK86lijyag&s=10",
         "back": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRARn3b3kCMQvCKrCyXFlrL9FkHf6rkjJI6mK86lijyag&s=10"
@@ -85,7 +85,7 @@
           }
         }
       ],
-      "slug": "fitsense-regata-essential"
+      "slug": "fitsense-polo-essential"
     },
     {
       "id": "2",

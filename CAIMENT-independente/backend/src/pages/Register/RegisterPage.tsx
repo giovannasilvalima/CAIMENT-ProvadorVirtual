@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/Button';
 
 import {
   registerUser,
-  loginUser,
   resendVerificationEmail,
   refreshCurrentUser,
 } from '@/services/firebase/auth';
@@ -79,32 +78,11 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      let user;
+      // Criar uma conta nova.
+      // O Firebase bloqueia e-mails que já possuem cadastro.
+      const user = await registerUser(normalizedEmail, password);
 
-      try {
-        // Criar conta e enviar confirmação.
-        user = await registerUser(normalizedEmail, password);
-      } catch (registrationError) {
-        const firebaseError = registrationError as {
-          code?: string;
-        };
-
-        // Recuperar uma conta existente.
-        // Isso permite completar um perfil cuja criação anterior falhou.
-        if (firebaseError.code !== 'auth/email-already-in-use') {
-          throw registrationError;
-        }
-
-        try {
-          user = await loginUser(normalizedEmail, password);
-        } catch {
-          throw new Error(
-            'Este e-mail já possui uma conta. Confira sua senha ou entre pela página de login.'
-          );
-        }
-      }
-
-      // Criar perfil sem sobrescrever um perfil existente.
+      // Criar perfil somente para a nova conta.
       await createUserProfile(
         user.uid,
         normalizedName,
@@ -138,18 +116,18 @@ export default function RegisterPage() {
       };
 
       switch (firebaseError.code) {
+        case 'auth/email-already-in-use':
+          setError(
+            'Este e-mail já possui uma conta. Faça login para continuar.'
+          );
+          break;
+
         case 'auth/invalid-email':
           setError('Digite um endereço de e-mail válido.');
           break;
 
         case 'auth/weak-password':
           setError('A senha deve possuir pelo menos 8 caracteres.');
-          break;
-
-        case 'auth/invalid-credential':
-        case 'auth/wrong-password':
-        case 'auth/user-not-found':
-          setError('E-mail ou senha incorretos.');
           break;
 
         case 'auth/operation-not-allowed':
@@ -167,7 +145,7 @@ export default function RegisterPage() {
         case 'permission-denied':
         case 'firestore/permission-denied':
           setError(
-            'Sua conta foi criada, mas não foi possível salvar seu perfil. Tente novamente com o mesmo e-mail e senha.'
+            'Sua conta pode ter sido criada, mas não foi possível salvar seu perfil. Tente novamente ou entre em contato com o suporte.'
           );
           break;
 
@@ -445,9 +423,7 @@ export default function RegisterPage() {
                     Li e aceito a{' '}
 
                     <Link
-                      to="/politica-de-privacidade"
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      to="/politicas"
                       className="font-medium text-caiment-purple-600 underline underline-offset-2"
                     >
                       política de privacidade

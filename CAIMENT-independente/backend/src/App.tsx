@@ -46,12 +46,10 @@ function ProtectedRoute({
     return null;
   }
 
-  // Usuário não autenticado.
   if (!user) {
     return <Navigate to="/login" replace />;
   }
 
-  // Usuário autenticado, mas com e-mail não confirmado.
   if (requireVerified && !emailVerified) {
     return <Navigate to="/verificacao" replace />;
   }
@@ -68,32 +66,28 @@ export default function App() {
             <Routes>
               {/* ROTAS PÚBLICAS */}
 
-              <Route
-                path="/"
-                element={<LandingPage />}
-              />
+              <Route path="/" element={<LandingPage />} />
 
-              <Route
-                path="/login"
-                element={<LoginPage />}
-              />
+              <Route path="/login" element={<LoginPage />} />
 
               <Route
                 path="/recuperar-senha"
                 element={<RecoverPasswordPage />}
               />
 
+              <Route path="/cadastro" element={<RegisterPage />} />
+
+              {/* POLÍTICAS E DOCUMENTOS - ACESSO PÚBLICO */}
+
               <Route
-                path="/cadastro"
-                element={<RegisterPage />}
+                path="/politicas"
+                element={<PoliciesPage />}
               />
 
               {/* ROTA PARA USUÁRIOS AUTENTICADOS */}
 
               <Route
-                element={
-                  <ProtectedRoute requireVerified={false} />
-                }
+                element={<ProtectedRoute requireVerified={false} />}
               >
                 <Route
                   path="/verificacao"
@@ -159,13 +153,6 @@ export default function App() {
                 <Route
                   path="/ajuda"
                   element={<HelpPage />}
-                />
-
-                {/* POLÍTICAS E DOCUMENTOS */}
-
-                <Route
-                  path="/politicas"
-                  element={<PoliciesPage />}
                 />
               </Route>
 
