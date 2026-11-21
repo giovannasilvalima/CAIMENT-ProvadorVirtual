@@ -11,10 +11,10 @@
  * - Preservar medidas e seus metadados.
  * - Preservar as medidas de todos os tamanhos disponíveis.
  * - Preservar modelagem, imagens, cores e propriedades do tecido.
- * - Preservar o caminho do modelo 3D de cada produto.
  * - Entregar dados padronizados aos adaptadores do CAIMENT.
  *
- * Este módulo não gera geometria nem executa simulações.
+ * Este módulo não recebe arquivos 3D de roupas,
+ * não gera geometria nem executa simulações.
  */
 
 // ============================================================
@@ -97,14 +97,6 @@ export interface StoreCatalogProduct {
   material: Record<string, unknown>;
   model: Record<string, unknown>;
 
-  /**
-   * Caminho ou URL do arquivo 3D da peça.
-   *
-   * Exemplo:
-   * /models/clothes/camiseta-essential.glb
-   */
-  clothingModel?: string;
-
   measurementConvention?: string;
 
   sizes: StoreCatalogSize[];
@@ -158,14 +150,6 @@ export interface StoreProductPayload {
   material?: Record<string, unknown>;
   model?: Record<string, unknown>;
 
-  /**
-   * Caminho ou URL do modelo 3D da roupa.
-   *
-   * Exemplo:
-   * /models/clothes/camiseta-essential.glb
-   */
-  clothingModel?: string;
-
   measurementConvention?: string;
 
   catalogVersion?: string;
@@ -194,11 +178,6 @@ export interface IntegratedStoreProduct {
 
     price?: number;
     image?: string;
-
-    /**
-     * Caminho ou URL do modelo 3D da roupa.
-     */
-    clothingModel?: string;
   };
 
   selection: {
@@ -312,52 +291,6 @@ function normalizeOptionalString(
   return value.trim();
 }
 
-/**
- * Valida o caminho ou URL do modelo 3D.
- *
- * Aceita:
- * - Caminhos locais iniciados por /models/
- * - URLs HTTP ou HTTPS
- *
- * Não exige que o arquivo esteja presente no backend,
- * pois arquivos locais podem ser servidos pelo frontend.
- */
-function normalizeClothingModel(
-  value: unknown,
-): string | undefined {
-  const clothingModel = normalizeOptionalString(
-    value,
-    'clothingModel',
-  );
-
-  if (clothingModel === undefined) {
-    return undefined;
-  }
-
-  const isLocalModelPath =
-    clothingModel.startsWith('/models/');
-
-  const isHttpUrl =
-    /^https?:\/\/\S+$/i.test(clothingModel);
-
-  if (
-    !isLocalModelPath &&
-    !isHttpUrl
-  ) {
-    throw new StoreIntegrationError(
-      'O campo "clothingModel" precisa ser um caminho iniciado por /models/ ou uma URL HTTP/HTTPS válida.',
-    );
-  }
-
-  if (/\s/.test(clothingModel)) {
-    throw new StoreIntegrationError(
-      'O caminho do modelo 3D não pode conter espaços.',
-    );
-  }
-
-  return clothingModel;
-}
-
 // ============================================================
 // NORMALIZAÇÃO DE CATEGORIAS
 // ============================================================
@@ -446,7 +379,7 @@ function normalizeCategory(
   }
 
   throw new StoreIntegrationError(
-    `Categoria de roupa não suportada: ${category}.`,
+    `Categoria de produto não suportada: ${category}.`,
   );
 }
 
@@ -871,10 +804,6 @@ export function receiveStoreProduct(
     'material',
   );
 
-  const clothingModel = normalizeClothingModel(
-    payload.clothingModel,
-  );
-
   const measurementUnit =
     payload.measurementUnit ?? 'cm';
 
@@ -931,8 +860,6 @@ export function receiveStoreProduct(
         payload.image,
         'image',
       ),
-
-      clothingModel,
     },
 
     selection: {
@@ -1037,10 +964,6 @@ function normalizeCatalogProduct(
 
     material,
     model,
-
-    clothingModel: normalizeClothingModel(
-      value.clothingModel,
-    ),
 
     measurementConvention: normalizeOptionalString(
       value.measurementConvention,

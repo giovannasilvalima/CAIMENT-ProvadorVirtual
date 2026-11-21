@@ -1,6 +1,6 @@
 
 {
-  "catalogVersion": "1.2.1",
+  "catalogVersion": "1.2.2",
   "notice": "CATÁLOGO FICTÍCIO PARA DEMONSTRAÇÃO. Todas as medidas são valores ilustrativos de referência e não representam produtos comerciais reais.",
   "measurementUnit": "cm",
   "products": [
@@ -326,6 +326,293 @@
         }
       ],
       "slug": "fitsense-short-casual"
+    },    
+    {
+      "id": "5",
+      "sku": "CAI-CAM-001",
+      "name": "Camiseta CAIMENT",
+      "category": "upper",
+      "categoryLabel": "Camisetas",
+      "price": 99.9,
+      "description": "Camiseta CAIMENT de modelagem regular, com mangas tradicionais, decote redondo e caimento confortável. Disponível na cor Roxo.",
+      "images": {
+        "front": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1200&q=90",
+        "back": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1200&q=90"
+      },
+      "colors": [
+        {
+          "name": "Roxo",
+          "hex": "#9254E1"
+        }
+      ],
+      "material": {
+        "composition": "100% algodão (referência fictícia)",
+        "elasticity": "low",
+        "elasticityLabel": "Baixa"
+      },
+      "model": {
+        "fit": "regular",
+        "sleeves": true,
+        "neckline": "round",
+        "geometryProfile": "tshirt-basic",
+        "garmentModel": "tshirt",
+        "droppedShoulder": false,
+        "wideSleeves": false
+      },
+      "measurementConvention": "Medidas fictícias da peça pronta. width representa a largura plana total na linha do tórax. height representa o comprimento vertical do ombro até a barra. depth representa a profundidade geométrica total entre frente e costas. shoulderWidth representa a largura linear entre as extremidades dos ombros. chestCircumference e waistCircumference representam as circunferências completas da peça. sleeveLength representa o comprimento da manga a partir da costura do ombro até a barra. sleeveOpening representa a circunferência completa da abertura de cada manga. armholeDepth representa a profundidade da cava. Todas as medidas são fornecidas em centímetros.",
+      "sizes": [
+        {
+          "size": "P",
+          "measurements": {
+            "width": {
+              "value": 48,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "largura plana na linha do tórax"
+            },
+            "height": {
+              "value": 66,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "ombro até a barra"
+            },
+            "depth": {
+              "value": 18,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "profundidade geométrica entre frente e costas"
+            },
+            "shoulderWidth": {
+              "value": 42,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "extremidade a extremidade dos ombros"
+            },
+            "neckWidth": {
+              "value": 17,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "largura da abertura do decote"
+            },
+            "chestCircumference": {
+              "value": 96,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha do tórax"
+            },
+            "waistCircumference": {
+              "value": 92,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha da cintura"
+            },
+            "hemCircumference": {
+              "value": 96,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha da barra"
+            },
+            "armholeDepth": {
+              "value": 21,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "ombro até linha inferior da cava"
+            },
+            "sleeveLength": {
+              "value": 20,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "costura do ombro até a barra da manga"
+            },
+            "sleeveOpening": {
+              "value": 32,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa da abertura de cada manga"
+            },
+            "frontNeckDepth": {
+              "value": 9,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "linha dos ombros até ponto mais baixo do decote frontal"
+            },
+            "backNeckDepth": {
+              "value": 3,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "linha dos ombros até ponto mais baixo do decote traseiro"
+            }
+          }
+        },
+        {
+          "size": "M",
+          "measurements": {
+            "width": {
+              "value": 51,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "largura plana na linha do tórax"
+            },
+            "height": {
+              "value": 69,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "ombro até a barra"
+            },
+            "depth": {
+              "value": 19,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "profundidade geométrica entre frente e costas"
+            },
+            "shoulderWidth": {
+              "value": 44,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "extremidade a extremidade dos ombros"
+            },
+            "neckWidth": {
+              "value": 18,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "largura da abertura do decote"
+            },
+            "chestCircumference": {
+              "value": 102,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha do tórax"
+            },
+            "waistCircumference": {
+              "value": 98,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha da cintura"
+            },
+            "hemCircumference": {
+              "value": 102,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha da barra"
+            },
+            "armholeDepth": {
+              "value": 22,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "ombro até linha inferior da cava"
+            },
+            "sleeveLength": {
+              "value": 21,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "costura do ombro até a barra da manga"
+            },
+            "sleeveOpening": {
+              "value": 34,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa da abertura de cada manga"
+            },
+            "frontNeckDepth": {
+              "value": 9.5,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "linha dos ombros até ponto mais baixo do decote frontal"
+            },
+            "backNeckDepth": {
+              "value": 3.5,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "linha dos ombros até ponto mais baixo do decote traseiro"
+            }
+          }
+        },
+        {
+          "size": "G",
+          "measurements": {
+            "width": {
+              "value": 54,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "largura plana na linha do tórax"
+            },
+            "height": {
+              "value": 72,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "ombro até a barra"
+            },
+            "depth": {
+              "value": 20,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "profundidade geométrica entre frente e costas"
+            },
+            "shoulderWidth": {
+              "value": 46,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "extremidade a extremidade dos ombros"
+            },
+            "neckWidth": {
+              "value": 19,
+              "unit": "cm",
+              "type": "linear",
+              "landmark": "largura da abertura do decote"
+            },
+            "chestCircumference": {
+              "value": 108,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha do tórax"
+            },
+            "waistCircumference": {
+              "value": 104,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha da cintura"
+            },
+            "hemCircumference": {
+              "value": 108,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa na linha da barra"
+            },
+            "armholeDepth": {
+              "value": 23,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "ombro até linha inferior da cava"
+            },
+            "sleeveLength": {
+              "value": 22,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "costura do ombro até a barra da manga"
+            },
+            "sleeveOpening": {
+              "value": 36,
+              "unit": "cm",
+              "type": "circumference",
+              "landmark": "circunferência completa da abertura de cada manga"
+            },
+            "frontNeckDepth": {
+              "value": 10,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "linha dos ombros até ponto mais baixo do decote frontal"
+            },
+            "backNeckDepth": {
+              "value": 4,
+              "unit": "cm",
+              "type": "length",
+              "landmark": "linha dos ombros até ponto mais baixo do decote traseiro"
+            }
+          }
+        }
+      ],
+      "slug": "caiment-camiseta-regular"
     }
+
   ]
 }

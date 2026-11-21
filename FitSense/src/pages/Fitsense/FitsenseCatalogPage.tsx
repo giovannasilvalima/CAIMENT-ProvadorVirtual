@@ -32,11 +32,11 @@ type CartItem = {
 const products: Product[] = [
   {
     id: 1,
-    name: 'Camiseta Essential',
-    category: 'Camisetas',
+    name: 'Polo Essential',
+    category: 'Polos',
     price: 129.9,
     image:
-      'https://cdn.dooca.store/946/products/a-567.jpg?v=1707488629&webp=0',
+      'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRARn3b3kCMQvCKrCyXFlrL9FkHf6rkjJI6mK86lijyag&s=10',
   },
   {
     id: 2,
@@ -44,7 +44,15 @@ const products: Product[] = [
     category: 'Calças',
     price: 249.9,
     image:
-      'https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=900&q=85',
+      'https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=1200&q=90',
+  },
+  {
+    id: 3,
+    name: 'Vestido Serena',
+    category: 'Vestidos',
+    price: 289.9,
+    image:
+      'https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&w=1200&q=90',
   },
   {
     id: 4,
@@ -52,14 +60,24 @@ const products: Product[] = [
     category: 'Shorts',
     price: 159.9,
     image:
-      'https://images.unsplash.com/photo-1591195853828-11db59a44f6b?auto=format&fit=crop&w=900&q=85',
+      'https://images.unsplash.com/photo-1591195853828-11db59a44f6b?auto=format&fit=crop&w=1200&q=90',
+  },
+  {
+    id: 5,
+    name: 'Camiseta CAIMENT Oversized',
+    category: 'Camisetas',
+    price: 99.9,
+    image:
+      'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=1200&q=90',
   },
 ];
 
 const categories = [
   'Todos',
+  'Polos',
   'Camisetas',
   'Calças',
+  'Vestidos',
   'Shorts',
 ];
 

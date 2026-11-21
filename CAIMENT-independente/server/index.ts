@@ -3,7 +3,6 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
-import path from 'node:path';
 
 import storeIntegrationRoutes from '../backend/src/features/integration/storeIntegration.routes.js';
 
@@ -12,6 +11,7 @@ import {
   createMultiviewTask,
   getTask,
   downloadModel,
+  downloadModelByTaskId,
 } from './services/tripo.js';
 
 dotenv.config();
@@ -195,10 +195,6 @@ app.post(
 
   async (req, res) => {
     try {
-      // ==========================================
-      // RECEBER FOTOGRAFIAS
-      // ==========================================
-
       const photos = getBodyPhotos(req);
 
       if (!photos) {
@@ -210,12 +206,7 @@ app.post(
       }
 
       validateBodyPhotos(photos);
-
       logReceivedPhotos(photos);
-
-      // ==========================================
-      // UPLOAD PARA O TRIPO
-      // ==========================================
 
       if (!process.env.TRIPO_API_KEY) {
         return res.status(500).json({
@@ -231,24 +222,16 @@ app.post(
       console.log('====================================');
 
       const frontToken = await uploadImage(photos.front);
-
       console.log('✅ Fotografia frontal enviada.');
 
       const leftToken = await uploadImage(photos.left);
-
       console.log('✅ Fotografia esquerda enviada.');
 
       const backToken = await uploadImage(photos.back);
-
       console.log('✅ Fotografia traseira enviada.');
 
       const rightToken = await uploadImage(photos.right);
-
       console.log('✅ Fotografia direita enviada.');
-
-      // ==========================================
-      // ORGANIZAR TOKENS
-      // ==========================================
 
       const imageTokens = {
         front: frontToken,
@@ -257,24 +240,17 @@ app.post(
         right: rightToken,
       };
 
-      // ==========================================
-      // CRIAR TAREFA MULTIVIEW
-      // ==========================================
-
       console.log('');
       console.log('====================================');
       console.log('🤖 CRIANDO AVATAR 3D');
       console.log('====================================');
 
-      const taskId = await createMultiviewTask(
-        imageTokens
-      );
+      const taskId = await createMultiviewTask(imageTokens);
 
       console.log('');
       console.log('====================================');
       console.log('✅ TAREFA CRIADA');
       console.log('====================================');
-
       console.log(`Task ID: ${taskId}`);
 
       return res.json({
@@ -283,13 +259,11 @@ app.post(
         message:
           'As quatro fotografias foram enviadas ao Tripo e o processamento do avatar foi iniciado.',
       });
-
     } catch (error) {
       console.error('');
       console.error('====================================');
       console.error('❌ ERRO AO GERAR AVATAR');
       console.error('====================================');
-
       console.error(error);
 
       return res.status(500).json({
@@ -325,7 +299,6 @@ app.get(
       console.log('====================================');
       console.log('🔎 CONSULTANDO AVATAR');
       console.log('====================================');
-
       console.log(`Task ID: ${taskId}`);
 
       const task = await getTask(taskId);
@@ -334,7 +307,6 @@ app.get(
         success: true,
         task,
       });
-
     } catch (error) {
       console.error(
         '❌ Erro ao consultar tarefa:',
@@ -361,40 +333,34 @@ app.get(
 
   async (req, res) => {
     try {
+      const taskId = req.query.taskId;
       const modelUrl = req.query.url;
 
       if (
-        !modelUrl ||
-        typeof modelUrl !== 'string'
+        taskId !== undefined &&
+        (typeof taskId !== 'string' || !taskId.trim())
       ) {
         return res.status(400).json({
           success: false,
-          error: 'URL do modelo não informada.',
+          error: 'Task ID inválido.',
         });
       }
 
-      let parsedUrl: URL;
-
-      try {
-        parsedUrl = new URL(modelUrl);
-      } catch {
+      if (
+        modelUrl !== undefined &&
+        (typeof modelUrl !== 'string' || !modelUrl.trim())
+      ) {
         return res.status(400).json({
           success: false,
           error: 'URL do modelo inválida.',
         });
       }
 
-      if (
-        parsedUrl.protocol !== 'https:' ||
-        !(
-          parsedUrl.hostname === 'tripo3d.com' ||
-          parsedUrl.hostname.endsWith('.tripo3d.com')
-        )
-      ) {
+      if (!taskId && !modelUrl) {
         return res.status(400).json({
           success: false,
           error:
-            'A URL do modelo não pertence a um domínio HTTPS permitido do Tripo.',
+            'Informe o taskId para recuperar o modelo atualizado ou a URL do modelo.',
         });
       }
 
@@ -403,9 +369,59 @@ app.get(
       console.log('📥 PROXY DO MODELO 3D');
       console.log('====================================');
 
-      console.log(`Host: ${parsedUrl.hostname}`);
+      let modelBuffer: Buffer;
 
-      const modelBuffer = await downloadModel(modelUrl);
+      // ------------------------------------------------------
+      // OPÇÃO 1: RECUPERAR PELA TASK
+      // ------------------------------------------------------
+
+      if (typeof taskId === 'string') {
+        console.log('🔄 Recuperando modelo pelo taskId.');
+        console.log(`Task ID: ${taskId}`);
+
+        modelBuffer = await downloadModelByTaskId(taskId);
+      }
+
+      // ------------------------------------------------------
+      // OPÇÃO 2: MANTER COMPATIBILIDADE COM URL ANTIGA
+      // ------------------------------------------------------
+
+      else if (typeof modelUrl === 'string') {
+        let parsedUrl: URL;
+
+        try {
+          parsedUrl = new URL(modelUrl);
+        } catch {
+          return res.status(400).json({
+            success: false,
+            error: 'URL do modelo inválida.',
+          });
+        }
+
+        if (
+          parsedUrl.protocol !== 'https:' ||
+          !(
+            parsedUrl.hostname === 'tripo3d.com' ||
+            parsedUrl.hostname.endsWith('.tripo3d.com')
+          )
+        ) {
+          return res.status(400).json({
+            success: false,
+            error:
+              'A URL do modelo não pertence a um domínio HTTPS permitido do Tripo.',
+          });
+        }
+
+        console.log('📎 Utilizando URL recebida.');
+        console.log(`Host: ${parsedUrl.hostname}`);
+
+        modelBuffer = await downloadModel(modelUrl);
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: 'Não foi possível identificar o modelo solicitado.',
+        });
+      }
 
       console.log(
         `✅ Modelo recebido: ${(
@@ -427,16 +443,16 @@ app.get(
 
       res.setHeader(
         'Cache-Control',
-        'public, max-age=3600'
+        'private, max-age=3600'
       );
 
       return res.send(modelBuffer);
-
     } catch (error) {
-      console.error(
-        '❌ Erro no proxy do modelo 3D:',
-        error
-      );
+      console.error('');
+      console.error('====================================');
+      console.error('❌ ERRO NO PROXY DO MODELO 3D');
+      console.error('====================================');
+      console.error(error);
 
       return res.status(500).json({
         success: false,
@@ -503,5 +519,6 @@ app.listen(PORT, () => {
   console.log(`Backend rodando em http://localhost:${PORT}`);
   console.log('Segmentação Python: desativada.');
   console.log('Geração de avatar: Tripo Multiview.');
+  console.log('Recuperação de modelo: URL atualizada por taskId.');
   console.log('');
 });

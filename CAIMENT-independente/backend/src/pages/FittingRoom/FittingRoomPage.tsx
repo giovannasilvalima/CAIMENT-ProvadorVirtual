@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -8,6 +9,7 @@ import {
   Sparkles,
   CheckCircle2,
   AlertCircle,
+  UserRound,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -41,8 +43,7 @@ interface SelectedProduct {
   image: string;
   size: string;
   color: string;
-  clothingModel?: string;
-  sizes?: ProductSize[];
+  sizes: ProductSize[];
   [key: string]: unknown;
 }
 
@@ -161,21 +162,6 @@ function normalizeProduct(
     return null;
   }
 
-  const clothingModel = getString(
-    nestedProduct.clothingModel,
-    nestedProduct.clothingModelUrl,
-    nestedProduct.model3dUrl,
-    nestedProduct.modelUrl,
-    data.clothingModel,
-    data.clothingModelUrl,
-    data.model3dUrl,
-    data.modelUrl,
-    payload.clothingModel,
-    payload.clothingModelUrl,
-    payload.model3dUrl,
-    payload.modelUrl,
-  );
-
   const images = isObject(combined.images)
     ? combined.images
     : {};
@@ -188,19 +174,17 @@ function normalizeProduct(
     images.front,
   );
 
-  const sizes = normalizeProductSizes(combined.sizes);
-
   return {
-    ...combined,
     id,
     name,
 
     category:
       getString(
+        combined.categoryLabel,
         combined.category,
         combined.type,
         combined.garmentType,
-      ) || 'upper',
+      ) || 'Produto',
 
     price: getNumber(
       combined.price,
@@ -225,9 +209,10 @@ function normalizeProduct(
         variant.color,
       ) || 'Padrão',
 
-    clothingModel,
-    sizes,
-  } as SelectedProduct;
+    sizes: normalizeProductSizes(
+      combined.sizes,
+    ),
+  };
 }
 
 function recoverSelectedProduct(): SelectedProduct | null {
@@ -471,9 +456,9 @@ function RecommendationPanel({
       )}
 
       <p className="mt-4 border-t border-caiment-line pt-3 text-[11px] leading-5 text-caiment-ink-soft">
-        A recomendação é baseada nas medidas corporais e nas
-        dimensões técnicas fornecidas pela loja. Ela não altera
-        as proporções originais do modelo 3D da peça.
+        A recomendação utiliza suas medidas corporais e as
+        dimensões técnicas dos tamanhos fornecidas pela loja.
+        O CAIMENT não gera nem modifica modelos de roupas.
       </p>
     </Card>
   );
@@ -502,9 +487,6 @@ export default function FittingRoomPage() {
   const [loadError, setLoadError] =
     useState<string | null>(null);
 
-  const clothingModelUrl =
-    product?.clothingModel ?? null;
-
   const recommendation = useMemo<SizeRecommendationResult>(
     () => {
       if (!product) {
@@ -531,7 +513,7 @@ export default function FittingRoomPage() {
           level: 'unavailable',
           ranking: [],
           message:
-            'A loja não enviou as medidas de todos os tamanhos. Não é possível calcular uma recomendação.',
+            'A loja não enviou as medidas dos tamanhos. Não é possível calcular uma recomendação.',
         };
       }
 
@@ -552,6 +534,7 @@ export default function FittingRoomPage() {
         setAvatarReady(false);
         setModelUrl(null);
         setProduct(null);
+        setMeasurements(null);
         return;
       }
 
@@ -565,23 +548,6 @@ export default function FittingRoomPage() {
 
         if (!cancelled) {
           setProduct(recoveredProduct);
-        }
-
-        if (recoveredProduct) {
-          console.log(
-            'CAIMENT: produto recuperado:',
-            recoveredProduct,
-          );
-
-          console.log(
-            'CAIMENT: arquivo 3D recebido:',
-            recoveredProduct.clothingModel,
-          );
-
-          console.log(
-            'CAIMENT: tamanhos recebidos:',
-            recoveredProduct.sizes,
-          );
         }
 
         const [
@@ -598,9 +564,6 @@ export default function FittingRoomPage() {
           return;
         }
 
-        console.log('CAIMENT: perfil:', profile);
-        console.log('CAIMENT: medidas do Firebase:', userMeasurements);
-
         setMeasurements(userMeasurements);
 
         setMeasurementsReady(
@@ -616,13 +579,13 @@ export default function FittingRoomPage() {
         }
       } catch (error) {
         console.error(
-          'CAIMENT: erro ao carregar dados do provador:',
+          'CAIMENT: erro ao carregar dados do usuário:',
           error,
         );
 
         if (!cancelled) {
           setLoadError(
-            'Não foi possível carregar os dados do provador. Tente novamente.',
+            'Não foi possível carregar seus dados. Tente novamente.',
           );
 
           setMeasurementsReady(false);
@@ -641,13 +604,13 @@ export default function FittingRoomPage() {
 
   if (measurementsReady === null) {
     return (
-      <DashboardLayout title="Provador virtual">
+      <DashboardLayout title="Meu avatar e tamanhos">
         <Card className="flex min-h-[420px] items-center justify-center">
           <div className="text-center">
             <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-caiment-purple-100 border-t-caiment-purple-500" />
 
             <p className="mt-4 text-sm text-caiment-ink-soft">
-              Verificando suas medidas...
+              Carregando seus dados...
             </p>
           </div>
         </Card>
@@ -657,7 +620,7 @@ export default function FittingRoomPage() {
 
   if (!measurementsReady) {
     return (
-      <DashboardLayout title="Provador virtual">
+      <DashboardLayout title="Meu avatar e tamanhos">
         <Card className="overflow-hidden">
           <div className="relative flex min-h-[420px] flex-col items-center justify-center overflow-hidden rounded-3xl bg-caiment-ink px-6 py-12 text-center">
             <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-caiment-purple-600/30 blur-3xl" />
@@ -669,8 +632,14 @@ export default function FittingRoomPage() {
             </div>
 
             <h3 className="relative mt-6 font-display text-2xl font-medium text-white">
-              Personalize suas medidas
+              Complete suas medidas
             </h3>
+
+            <p className="relative mt-2 max-w-md text-sm leading-relaxed text-white/70">
+              Precisamos das suas medidas corporais para
+              recomendar os tamanhos mais compatíveis com
+              você.
+            </p>
 
             {loadError && (
               <p className="relative mt-3 text-sm text-red-300">
@@ -681,7 +650,7 @@ export default function FittingRoomPage() {
             <div className="relative mt-7 flex flex-col gap-3 sm:flex-row">
               <Link to="/medidas">
                 <Button className="bg-caiment-lime text-caiment-ink hover:bg-caiment-lime-soft">
-                  Personalizar agora
+                  Cadastrar medidas
                 </Button>
               </Link>
 
@@ -690,7 +659,7 @@ export default function FittingRoomPage() {
                   variant="outline"
                   className="border-white/20 text-white hover:bg-white/10"
                 >
-                  Mais tarde
+                  Ver meu avatar
                 </Button>
               </Link>
             </div>
@@ -701,133 +670,98 @@ export default function FittingRoomPage() {
   }
 
   return (
-    <DashboardLayout title="Provador virtual">
+    <DashboardLayout title="Meu avatar e tamanhos">
       <div className="space-y-6">
-        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-caiment-purple-600">
-              Provador virtual
-            </p>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-caiment-purple-600">
+            CAIMENT
+          </p>
 
-            <h2 className="mt-1 font-display text-2xl font-medium text-caiment-ink">
-              Experimente no seu avatar
-            </h2>
-          </div>
+          <h2 className="mt-1 font-display text-2xl font-medium text-caiment-ink">
+            Seu avatar e recomendação de tamanho
+          </h2>
+
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-caiment-ink-soft">
+            Consulte seu avatar personalizado e descubra
+            qual tamanho apresenta maior compatibilidade
+            com suas medidas.
+          </p>
         </div>
 
-        {!product ? (
-          <Card className="overflow-hidden">
-            <div className="relative flex min-h-[820px] flex-col items-center justify-center overflow-hidden rounded-3xl bg-caiment-ink px-6 py-12 text-center">
-              <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-caiment-purple-600/30 blur-3xl" />
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <Card padding="none" className="overflow-hidden">
+            <div className="relative overflow-hidden rounded-3xl bg-caiment-purple-50/60 p-3">
+              {avatarReady && modelUrl ? (
+                <>
+                  <AvatarViewer
+                    key={modelUrl}
+                    modelUrl={modelUrl}
+                    className="h-[820px]"
+                  />
 
-              <div className="pointer-events-none absolute -bottom-20 -left-20 h-64 w-64 rounded-full bg-caiment-lime/10 blur-3xl" />
+                  <div className="absolute left-6 top-6 flex items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm backdrop-blur">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-caiment-lime-deep" />
 
-              <div className="relative flex h-16 w-16 items-center justify-center rounded-3xl bg-caiment-purple-500 text-white shadow-lg">
-                <ShoppingBag size={28} />
+                    <span className="text-xs font-semibold text-caiment-ink">
+                      Avatar carregado
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="relative flex min-h-[820px] flex-col items-center justify-center overflow-hidden rounded-3xl bg-caiment-ink px-8 py-12 text-center">
+                  <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-caiment-purple-600/30 blur-3xl" />
+
+                  <div className="pointer-events-none absolute -bottom-24 -left-24 h-72 w-72 rounded-full bg-caiment-lime/10 blur-3xl" />
+
+                  <div className="relative flex h-16 w-16 items-center justify-center rounded-3xl bg-caiment-purple-500 text-white shadow-lg">
+                    <Sparkles size={28} />
+                  </div>
+
+                  <h3 className="relative mt-6 font-display text-2xl font-medium text-white">
+                    Seu avatar ainda não está pronto
+                  </h3>
+
+                  <p className="relative mt-2 max-w-sm text-sm leading-relaxed text-white/70">
+                    Crie seu avatar personalizado para
+                    visualizar seu modelo 3D.
+                  </p>
+
+                  <Link to="/avatar-criacao">
+                    <Button className="relative mt-7 bg-caiment-lime text-caiment-ink hover:bg-caiment-lime-soft">
+                      Criar meu avatar
+                    </Button>
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t border-caiment-line px-5 py-4">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-caiment-ink-soft">
+                  Seu avatar
+                </p>
+
+                <p className="mt-1 text-sm font-medium text-caiment-ink">
+                  {avatarReady && modelUrl
+                    ? 'Modelo personalizado'
+                    : 'Avatar ainda não criado'}
+                </p>
               </div>
 
-              <h3 className="relative mt-6 font-display text-2xl font-medium text-white">
-                Nenhuma peça selecionada
-              </h3>
-
-              <Link to="/dashboard">
+              <Link to="/avatar">
                 <Button
-                  className="relative mt-7 bg-caiment-lime text-caiment-ink hover:bg-caiment-lime-soft"
-                  icon={<ArrowLeft size={16} />}
+                  size="sm"
+                  variant="outline"
+                  icon={<UserRound size={14} />}
                 >
-                  Voltar ao painel
+                  Meu avatar
                 </Button>
               </Link>
             </div>
           </Card>
-        ) : (
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-            <Card padding="none" className="overflow-hidden">
-              <div className="relative overflow-hidden rounded-3xl bg-caiment-purple-50/60 p-3">
-                {avatarReady && modelUrl ? (
-                  <>
-                    {clothingModelUrl ? (
-                      <AvatarViewer
-                        key={`${product.id}-${clothingModelUrl}`}
-                        modelUrl={modelUrl}
-                        clothingModelUrl={clothingModelUrl}
-                        measurements={measurements}
-                        className="h-[820px]"
-                      />
-                    ) : (
-                      <div className="flex min-h-[820px] flex-col items-center justify-center rounded-3xl bg-caiment-ink px-8 py-12 text-center">
-                        <AlertCircle
-                          size={32}
-                          className="text-amber-300"
-                        />
 
-                        <h3 className="mt-5 font-display text-xl font-medium text-white">
-                          Modelo 3D não informado
-                        </h3>
-
-                        <p className="mt-2 max-w-sm text-sm leading-relaxed text-white/70">
-                          A loja não enviou o caminho do arquivo 3D desta peça.
-                        </p>
-                      </div>
-                    )}
-
-                    <div className="absolute left-6 top-6 flex items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm backdrop-blur">
-                      <span className="h-2 w-2 animate-pulse rounded-full bg-caiment-lime-deep" />
-
-                      <span className="text-xs font-semibold text-caiment-ink">
-                        Avatar carregado
-                      </span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="relative flex min-h-[820px] flex-col items-center justify-center overflow-hidden rounded-3xl bg-caiment-ink px-8 py-12 text-center">
-                    <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-caiment-purple-600/30 blur-3xl" />
-
-                    <div className="pointer-events-none absolute -bottom-24 -left-24 h-72 w-72 rounded-full bg-caiment-lime/10 blur-3xl" />
-
-                    <div className="relative flex h-16 w-16 items-center justify-center rounded-3xl bg-caiment-purple-500 text-white shadow-lg">
-                      <Sparkles size={28} />
-                    </div>
-
-                    <h3 className="relative mt-6 font-display text-2xl font-medium text-white">
-                      Seu avatar ainda não está pronto
-                    </h3>
-
-                    <Link to="/avatar-criacao">
-                      <Button className="relative mt-7 bg-caiment-lime text-caiment-ink hover:bg-caiment-lime-soft">
-                        Criar meu avatar
-                      </Button>
-                    </Link>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between gap-4 border-t border-caiment-line px-5 py-4">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-caiment-ink-soft">
-                    Seu avatar
-                  </p>
-
-                  <p className="mt-1 text-sm font-medium text-caiment-ink">
-                    {avatarReady && modelUrl
-                      ? 'Modelo personalizado'
-                      : 'Avatar ainda não criado'}
-                  </p>
-                </div>
-
-                <Link to="/avatar">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    icon={<Ruler size={14} />}
-                  >
-                    Ver medidas
-                  </Button>
-                </Link>
-              </div>
-            </Card>
-
-            <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4">
+            {product ? (
               <Card>
                 <div className="flex gap-4">
                   <div className="h-28 w-24 shrink-0 overflow-hidden rounded-2xl bg-caiment-purple-50">
@@ -858,17 +792,11 @@ export default function FittingRoomPage() {
                     </p>
                   </div>
                 </div>
-              </Card>
 
-              <Card>
-                <p className="text-xs font-semibold uppercase tracking-wide text-caiment-ink-soft">
-                  Peça selecionada
-                </p>
-
-                <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="mt-4 grid grid-cols-2 gap-3 border-t border-caiment-line pt-4">
                   <div className="rounded-2xl bg-caiment-purple-50 p-4">
                     <p className="text-xs text-caiment-ink-soft">
-                      Referência da peça
+                      Tamanho selecionado
                     </p>
 
                     <p className="mt-1 text-lg font-semibold text-caiment-ink">
@@ -878,7 +806,7 @@ export default function FittingRoomPage() {
 
                   <div className="rounded-2xl bg-caiment-purple-50 p-4">
                     <p className="text-xs text-caiment-ink-soft">
-                      Cor
+                      Cor selecionada
                     </p>
 
                     <p className="mt-1 text-sm font-semibold text-caiment-ink">
@@ -887,51 +815,85 @@ export default function FittingRoomPage() {
                   </div>
                 </div>
               </Card>
+            ) : (
+              <Card>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-caiment-purple-100 text-caiment-purple-700">
+                    <ShoppingBag size={21} />
+                  </div>
 
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-caiment-ink-soft">
+                      Loja parceira
+                    </p>
+
+                    <h3 className="mt-1 font-display text-lg font-medium text-caiment-ink">
+                      Nenhum produto selecionado
+                    </h3>
+                  </div>
+                </div>
+
+                <p className="mt-3 text-sm leading-6 text-caiment-ink-soft">
+                  Você pode acessar o CAIMENT diretamente
+                  para consultar seu avatar. Para receber
+                  uma recomendação, entre pelo produto de
+                  uma loja parceira.
+                </p>
+              </Card>
+            )}
+
+            {product && (
               <RecommendationPanel
                 recommendation={recommendation}
               />
+            )}
 
-              <div className="rounded-2xl border border-caiment-purple-100 bg-caiment-purple-50 p-4">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`h-2 w-2 rounded-full ${
-                      clothingModelUrl
-                        ? 'bg-green-500'
-                        : 'bg-amber-500'
-                    }`}
-                  />
-
-                  <span className="text-xs font-medium text-caiment-ink">
-                    {clothingModelUrl
-                      ? 'Arquivo 3D da peça identificado'
-                      : 'Arquivo 3D não informado'}
-                  </span>
+            <Card>
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-caiment-purple-100 text-caiment-purple-700">
+                  <Ruler size={21} />
                 </div>
 
-                {clothingModelUrl && (
-                  <div className="mt-3 border-t border-caiment-purple-100 pt-3">
-                    <p className="text-xs text-caiment-ink-soft">
-                      Produto
-                    </p>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-caiment-ink-soft">
+                    Seus dados
+                  </p>
 
-                    <p className="mt-1 text-sm font-semibold text-caiment-ink">
-                      {product.name}
-                    </p>
-
-                    <p className="mt-2 text-xs text-caiment-ink-soft">
-                      Arquivo 3D
-                    </p>
-
-                    <p className="mt-1 break-all text-xs font-medium text-caiment-ink">
-                      {clothingModelUrl}
-                    </p>
-                  </div>
-                )}
+                  <h3 className="mt-1 font-display text-lg font-medium text-caiment-ink">
+                    Medidas corporais
+                  </h3>
+                </div>
               </div>
-            </div>
+
+              <p className="mt-3 text-sm leading-6 text-caiment-ink-soft">
+                Suas medidas ficam salvas no seu perfil e
+                podem ser atualizadas sempre que necessário.
+              </p>
+
+              <Link to="/medidas">
+                <Button
+                  className="mt-4 w-full"
+                  variant="outline"
+                  icon={<Ruler size={15} />}
+                >
+                  Atualizar minhas medidas
+                </Button>
+              </Link>
+            </Card>
+
+            {product && (
+              <Link to="/dashboard">
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  icon={<ArrowLeft size={15} />}
+                >
+                  Voltar ao painel
+                </Button>
+              </Link>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </DashboardLayout>
   );

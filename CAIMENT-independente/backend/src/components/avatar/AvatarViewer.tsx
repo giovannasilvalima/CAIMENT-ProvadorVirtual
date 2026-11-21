@@ -4,16 +4,30 @@
 CAIMENT — AvatarViewer
 ============================================================
 
-- Carrega e normaliza o avatar Tripo.
-- Carrega roupas GLB / GLTF.
-- Mantém compatibilidade com clothingObject.
-- Extrai referências anatômicas da geometria do avatar.
-- Prioriza landmarks fornecidos pelo AvatarLandmarks.
-- Aplica escala proporcional à altura corporal.
-- Preserva a geometria e a folga original das roupas.
-- Não executa simulação de colisão BVH.
-- Não depende de Shape Keys.
-- Não gera roupas proceduralmente.
+RESPONSABILIDADES:
+- Buscar e carregar somente o avatar Tripo.
+- Recuperar o modelo pelo taskId, renovando a URL temporária.
+- Manter compatibilidade com URLs antigas.
+- Normalizar a orientação do avatar.
+- Aplicar escala para altura de referência de 3,4 metros.
+- Centralizar horizontalmente o avatar.
+- Posicionar os pés no chão.
+- Manter câmera, iluminação e controles de visualização.
+- Exibir o placeholder quando não houver avatar.
+
+INDEPENDÊNCIA:
+- Não importa módulos da pasta clothing.
+- Não carrega roupas.
+- Não utiliza clothingObject.
+- Não processa medidas corporais.
+- Não executa detecção ou correção de colisões.
+
+CONVENÇÃO ESPACIAL FINAL:
+X = largura
+Y = altura
+Z = profundidade
++Z = frente do Viewer
+-Z = costas
 
 ============================================================
 */
@@ -67,56 +81,21 @@ import {
   ErrorBoundary,
 } from '@/components/ui/ErrorBoundary';
 
-import {
-  normalizeAvatarCoordinateSystem,
-} from '@/features/clothing/geometry/AvatarCoordinateSystem';
-
-import {
-  extractAvatarLandmarks,
-} from '@/features/clothing/geometry/AvatarLandmarks';
-
-import type {
-  AvatarLandmarkName,
-} from '@/features/clothing/geometry/AvatarLandmarks';
-
 // ============================================================
 // PROPRIEDADES
 // ============================================================
 
 interface AvatarViewerProps {
   modelUrl?: string | null;
+  taskId?: string | null;
+
+  // Compatibilidade com componentes antigos.
   clothingModelUrl?: string | null;
   clothingObject?: Object3D | null;
   measurements?: unknown;
+
   className?: string;
   showControls?: boolean;
-}
-
-// ============================================================
-// DADOS DO AVATAR
-// ============================================================
-
-interface AvatarFitData {
-  box: THREE.Box3;
-  size: THREE.Vector3;
-  center: THREE.Vector3;
-  landmarks: Record<string, THREE.Vector3>;
-  inferredLandmarks: AvatarLandmarkName[];
-  surface: Object3D;
-  landmarkSources: Record<string, 'supplied' | 'geometry-estimated'>;
-}
-
-interface AvatarProfileSection {
-  y: number;
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-  count: number;
-  width: number;
-  depth: number;
-  centerX: number;
-  centerZ: number;
 }
 
 // ============================================================
@@ -126,19 +105,6 @@ interface AvatarProfileSection {
 const AVATAR_TARGET_HEIGHT = 3.4;
 
 const AVATAR_ROTATION_Y = -Math.PI / 2;
-
-const CLOTHING_FORWARD_OFFSET = 0.1;
-
-/**
- * Elevação adicional da camiseta para compensar
- * a diferença entre o topo da bounding box e a gola.
- *
- * 2,5% de um avatar de 3,4 m = aproximadamente 8,5 cm.
- *
- * Esse ajuste é exclusivamente de posicionamento:
- * não modifica geometria, escala ou modelagem da roupa.
- */
-const TSHIRT_VERTICAL_OFFSET_RATIO = 0.025;
 
 const CAMERA_POSITION: [number, number, number] = [
   0,
@@ -153,923 +119,13 @@ const CAMERA_TARGET: [number, number, number] = [
 ];
 
 // ============================================================
-// VALIDAÇÃO
+// PREPARAÇÃO DO MODELO
 // ============================================================
 
-function isRecord(
-  value: unknown,
-): value is Record<string, unknown> {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value)
-  );
-}
-
-// ============================================================
-// MEDIDAS CORPORAIS
-// ============================================================
-
-function getMeasurementRecords(
-  measurements: unknown,
-): Record<string, unknown>[] {
-  if (!isRecord(measurements)) {
-    return [];
-  }
-
-  const records = [measurements];
-
-  for (const key of [
-    'medidas',
-    'measurements',
-    'dados',
-  ]) {
-    const nested = measurements[key];
-
-    if (isRecord(nested)) {
-      records.push(nested);
-    }
-  }
-
-  return records;
-}
-
-// ============================================================
-// ALTURA REAL DO USUÁRIO
-// ============================================================
-
-function getUserHeightInMeters(
-  measurements: unknown,
-): number | null {
-  const records = getMeasurementRecords(
-    measurements,
-  );
-
-  for (const record of records) {
-    for (const key of [
-      'altura',
-      'alturaTotal',
-      'height',
-    ]) {
-      const candidate = record[key];
-
-      let value: number;
-      let unit: string | null = null;
-
-      if (typeof candidate === 'number') {
-        value = candidate;
-      } else if (typeof candidate === 'string') {
-        value = Number(candidate);
-      } else if (isRecord(candidate)) {
-        value = Number(
-          candidate.valor ?? candidate.value,
-        );
-
-        if (typeof candidate.unidade === 'string') {
-          unit = candidate.unidade.toLowerCase();
-        } else if (typeof candidate.unit === 'string') {
-          unit = candidate.unit.toLowerCase();
-        }
-      } else {
-        continue;
-      }
-
-      if (!Number.isFinite(value) || value <= 0) {
-        continue;
-      }
-
-      if (
-        unit === 'm' ||
-        unit === 'metro' ||
-        unit === 'metros'
-      ) {
-        return value;
-      }
-
-      if (
-        unit === 'cm' ||
-        unit === 'centimetro' ||
-        unit === 'centimetros'
-      ) {
-        return value / 100;
-      }
-
-      return value > 10
-        ? value / 100
-        : value;
-    }
-  }
-
-  return null;
-}
-
-// ============================================================
-// EXTRAÇÃO DOS VÉRTICES DO AVATAR
-// ============================================================
-
-function collectAvatarVertices(
+function prepareAvatarForRendering(
   avatar: Object3D,
-): THREE.Vector3[] {
-  const vertices: THREE.Vector3[] = [];
-
-  const vertex = new THREE.Vector3();
-
-  avatar.updateMatrixWorld(true);
-
+): void {
   avatar.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-
-    if (!child.visible) {
-      return;
-    }
-
-    const position = child.geometry.getAttribute(
-      'position',
-    );
-
-    if (!position || position.count === 0) {
-      return;
-    }
-
-    child.updateWorldMatrix(true, false);
-
-    for (let i = 0; i < position.count; i++) {
-      child.getVertexPosition(i, vertex);
-
-      vertex.applyMatrix4(child.matrixWorld);
-
-      if (
-        Number.isFinite(vertex.x) &&
-        Number.isFinite(vertex.y) &&
-        Number.isFinite(vertex.z)
-      ) {
-        vertices.push(vertex.clone());
-      }
-    }
-  });
-
-  return vertices;
-}
-
-// ============================================================
-// PERFIL HORIZONTAL DO CORPO
-// ============================================================
-
-function buildAvatarProfile(
-  vertices: THREE.Vector3[],
-  box: THREE.Box3,
-): AvatarProfileSection[] {
-  if (vertices.length === 0) {
-    return [];
-  }
-
-  const height = box.max.y - box.min.y;
-  const width = box.max.x - box.min.x;
-
-  if (height <= 0 || width <= 0) {
-    return [];
-  }
-
-  const sectionCount = 100;
-
-  const sections: AvatarProfileSection[] = [];
-
-  const centralLimit = Math.max(
-    width * 0.27,
-    0.08,
-  );
-
-  const centerX = (box.min.x + box.max.x) / 2;
-
-  for (let index = 0; index < sectionCount; index++) {
-    const minY =
-      box.min.y + (height * index) / sectionCount;
-
-    const maxY =
-      box.min.y + (height * (index + 1)) / sectionCount;
-
-    const sectionVertices = vertices.filter((vertex) => {
-      return (
-        vertex.y >= minY &&
-        vertex.y < maxY &&
-        Math.abs(vertex.x - centerX) <= centralLimit
-      );
-    });
-
-    if (sectionVertices.length < 3) {
-      continue;
-    }
-
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minZ = Infinity;
-    let maxZ = -Infinity;
-
-    let sumX = 0;
-    let sumZ = 0;
-    let sumY = 0;
-
-    for (const vertex of sectionVertices) {
-      minX = Math.min(minX, vertex.x);
-      maxX = Math.max(maxX, vertex.x);
-
-      minZ = Math.min(minZ, vertex.z);
-      maxZ = Math.max(maxZ, vertex.z);
-
-      sumX += vertex.x;
-      sumZ += vertex.z;
-      sumY += vertex.y;
-    }
-
-    sections.push({
-      y: sumY / sectionVertices.length,
-      minX,
-      maxX,
-      minZ,
-      maxZ,
-      count: sectionVertices.length,
-      width: maxX - minX,
-      depth: maxZ - minZ,
-      centerX: sumX / sectionVertices.length,
-      centerZ: sumZ / sectionVertices.length,
-    });
-  }
-
-  return sections;
-}
-
-// ============================================================
-// SELEÇÃO DE SEÇÕES ANATÔMICAS
-// ============================================================
-
-function selectProfileSection(
-  sections: AvatarProfileSection[],
-  minHeight: number,
-  maxHeight: number,
-  metric: 'width' | 'depth',
-  mode: 'min' | 'max',
-): AvatarProfileSection | null {
-  const candidates = sections.filter((section) => {
-    return (
-      section.y >= minHeight &&
-      section.y <= maxHeight
-    );
-  });
-
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  candidates.sort((a, b) => {
-    const valueA = a[metric];
-    const valueB = b[metric];
-
-    return mode === 'min'
-      ? valueA - valueB
-      : valueB - valueA;
-  });
-
-  return candidates[0];
-}
-
-// ============================================================
-// ESTIMATIVA GEOMÉTRICA DOS LANDMARKS
-// ============================================================
-
-function estimateGeometricLandmarks(
-  avatar: Object3D,
-  box: THREE.Box3,
-): Record<string, THREE.Vector3> {
-  const vertices = collectAvatarVertices(avatar);
-
-  if (vertices.length < 30) {
-    console.warn(
-      'Poucos vértices disponíveis para estimar landmarks do avatar.',
-      vertices.length,
-    );
-
-    return {};
-  }
-
-  const sections = buildAvatarProfile(vertices, box);
-
-  if (sections.length < 10) {
-    console.warn(
-      'Não foi possível construir um perfil corporal confiável.',
-    );
-
-    return {};
-  }
-
-  const height = box.max.y - box.min.y;
-
-  if (!Number.isFinite(height) || height <= 0) {
-    return {};
-  }
-
-  const normalizedSections = sections.map((section) => ({
-    ...section,
-    y: (section.y - box.min.y) / height,
-  }));
-
-  const neck = selectProfileSection(
-    normalizedSections, 0.82, 0.96, 'width', 'min',
-  );
-
-  const shoulders = selectProfileSection(
-    normalizedSections, 0.70, 0.87, 'width', 'max',
-  );
-
-  const bust = selectProfileSection(
-    normalizedSections, 0.59, 0.76, 'depth', 'max',
-  );
-
-  const waist = selectProfileSection(
-    normalizedSections, 0.45, 0.65, 'width', 'min',
-  );
-
-  const hip = selectProfileSection(
-    normalizedSections, 0.34, 0.54, 'width', 'max',
-  );
-
-  const crotch = selectProfileSection(
-    normalizedSections, 0.20, 0.40, 'width', 'min',
-  );
-
-  const landmarks: Record<string, THREE.Vector3> = {};
-
-  const makePoint = (
-    section: AvatarProfileSection | null,
-  ): THREE.Vector3 | null => {
-    if (!section) {
-      return null;
-    }
-
-    return new THREE.Vector3(
-      section.centerX,
-      box.min.y + section.y * height,
-      section.centerZ,
-    );
-  };
-
-  const add = (
-    name: string,
-    section: AvatarProfileSection | null,
-  ) => {
-    const point = makePoint(section);
-
-    if (point) {
-      landmarks[name] = point;
-    }
-  };
-
-  add('neckBase', neck);
-  add('shoulderCenter', shoulders);
-  add('bustCenter', bust);
-  add('waistCenter', waist);
-  add('hipCenter', hip);
-  add('crotchCenter', crotch);
-
-  const bodyCenter = makePoint(bust ?? waist);
-
-  if (bodyCenter) {
-    landmarks.bodyCenter = bodyCenter;
-  }
-
-  console.log(
-    'LANDMARKS ESTIMADOS PELA GEOMETRIA TRIPO',
-    {
-      vertexCount: vertices.length,
-      profileSections: sections.length,
-      found: Object.keys(landmarks),
-      points: Object.fromEntries(
-        Object.entries(landmarks).map(([name, point]) => [
-          name,
-          point.toArray(),
-        ]),
-      ),
-    },
-  );
-
-  return landmarks;
-}
-
-// ============================================================
-// EXTRAÇÃO COMPLETA DOS DADOS DO AVATAR
-// ============================================================
-
-function extractAvatarFitData(
-  avatar: Object3D,
-): AvatarFitData {
-  avatar.updateMatrixWorld(true);
-
-  const box = new THREE.Box3().setFromObject(
-    avatar,
-  );
-
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-
-  box.getSize(size);
-  box.getCenter(center);
-
-  if (
-    !Number.isFinite(size.y) ||
-    size.y <= 0
-  ) {
-    throw new Error(
-      'Dimensões inválidas do avatar.',
-    );
-  }
-
-  const extraction = extractAvatarLandmarks(
-    avatar,
-  );
-
-  const landmarks: Record<string, THREE.Vector3> = {};
-
-  const landmarkSources: Record<
-    string,
-    'supplied' | 'geometry-estimated'
-  > = {};
-
-  for (const [name, value] of Object.entries(
-    extraction.landmarks,
-  )) {
-    if (
-      value instanceof THREE.Vector3 &&
-      Number.isFinite(value.x) &&
-      Number.isFinite(value.y) &&
-      Number.isFinite(value.z)
-    ) {
-      landmarks[name] = value.clone();
-      landmarkSources[name] = 'supplied';
-    }
-  }
-
-  const estimated = estimateGeometricLandmarks(
-    avatar,
-    box,
-  );
-
-  for (const [name, value] of Object.entries(estimated)) {
-    if (!landmarks[name]) {
-      landmarks[name] = value.clone();
-      landmarkSources[name] = 'geometry-estimated';
-    }
-  }
-
-  const inferredLandmarks = [
-    ...extraction.inferred,
-  ] as AvatarLandmarkName[];
-
-  console.log(
-    'LANDMARKS FINAIS DO AVATAR',
-    {
-      available: extraction.available,
-      missing: extraction.missing,
-      inferred: inferredLandmarks,
-      landmarkCount: Object.keys(landmarks).length,
-      sources: landmarkSources,
-      avatarSize: size.toArray(),
-    },
-  );
-
-  return {
-    box,
-    size,
-    center,
-    landmarks,
-    inferredLandmarks,
-    surface: avatar,
-    landmarkSources,
-  };
-}
-
-// ============================================================
-// CONSULTA DE LANDMARKS
-// ============================================================
-
-function getLandmark(
-  fitData: AvatarFitData,
-  names: string[],
-): THREE.Vector3 | null {
-  for (const name of names) {
-    const landmark = fitData.landmarks[name];
-
-    if (
-      landmark instanceof THREE.Vector3 &&
-      Number.isFinite(landmark.x) &&
-      Number.isFinite(landmark.y) &&
-      Number.isFinite(landmark.z)
-    ) {
-      return landmark.clone();
-    }
-  }
-
-  return null;
-}
-
-// ============================================================
-// TRANSLADAÇÃO EM COORDENADAS DO OBJETO PAI
-// ============================================================
-
-function translateObjectInWorld(
-  object: Object3D,
-  worldTranslation: THREE.Vector3,
-): void {
-  if (!object.parent) {
-    object.position.add(worldTranslation);
-    return;
-  }
-
-  object.parent.updateWorldMatrix(true, false);
-
-  const inverseParentMatrix = object.parent.matrixWorld
-    .clone()
-    .invert();
-
-  inverseParentMatrix.setPosition(0, 0, 0);
-
-  const localTranslation = worldTranslation
-    .clone()
-    .applyMatrix4(inverseParentMatrix);
-
-  object.position.add(localTranslation);
-}
-
-// ============================================================
-// IDENTIFICAÇÃO DO TIPO DA ROUPA
-// ============================================================
-
-function normalizeGarmentType(
-  value: string,
-): string {
-  const normalized = value
-    .toLowerCase()
-    .trim()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[\s_-]+/g, '');
-
-  if (
-    [
-      'tshirt',
-      'camiseta',
-      'shirt',
-      'regata',
-    ].includes(normalized)
-  ) {
-    return 'tshirt';
-  }
-
-  if (
-    [
-      'short',
-      'shorts',
-    ].includes(normalized)
-  ) {
-    return 'short';
-  }
-
-  if (
-    [
-      'pants',
-      'calca',
-      'trousers',
-    ].includes(normalized)
-  ) {
-    return 'pants';
-  }
-
-  if (
-    [
-      'dress',
-      'vestido',
-    ].includes(normalized)
-  ) {
-    return 'dress';
-  }
-
-  return '';
-}
-
-function getGarmentType(
-  garment: Object3D,
-): string {
-  const candidates = [
-    garment.userData.garmentType,
-    garment.userData.type,
-    garment.userData.category,
-  ];
-
-  for (const candidate of candidates) {
-    if (typeof candidate !== 'string') {
-      continue;
-    }
-
-    const type = normalizeGarmentType(candidate);
-
-    if (type) {
-      return type;
-    }
-  }
-
-  return 'tshirt';
-}
-
-function getGarmentTypeFromUrl(
-  url: string,
-): string {
-  const filename = decodeURIComponent(
-    url.split('/').pop() ?? '',
-  );
-
-  const normalized = filename
-    .toLowerCase()
-    .replace(/\.(glb|gltf)$/i, '');
-
-  const patterns: Array<[RegExp, string]> = [
-    [/(^|[-_])(?:short|shorts)([-_]|$)/, 'short'],
-    [/(^|[-_])(?:pants|calca|trousers)([-_]|$)/, 'pants'],
-    [/(^|[-_])(?:dress|vestido)([-_]|$)/, 'dress'],
-    [/(^|[-_])(?:tshirt|camiseta|shirt|regata)([-_]|$)/, 'tshirt'],
-  ];
-
-  for (const [pattern, type] of patterns) {
-    if (pattern.test(normalized)) {
-      return type;
-    }
-  }
-
-  return '';
-}
-
-// ============================================================
-// ESCALA PROPORCIONAL DA ROUPA
-// ============================================================
-
-function applyGarmentScale(
-  garment: Object3D,
-  measurements: unknown,
-): number {
-  if (garment.userData.avatarScaleApplied === true) {
-    return Number(
-      garment.userData.uniformScale ?? 1,
-    );
-  }
-
-  const userHeight = getUserHeightInMeters(
-    measurements,
-  );
-
-  if (userHeight === null || userHeight <= 0) {
-    console.warn(
-      'Altura corporal não encontrada. Escala original da roupa preservada.',
-    );
-
-    return 1;
-  }
-
-  const scale =
-    AVATAR_TARGET_HEIGHT / userHeight;
-
-  if (!Number.isFinite(scale) || scale <= 0) {
-    console.warn(
-      'Fator de escala inválido. Escala original da roupa preservada.',
-    );
-
-    return 1;
-  }
-
-  garment.scale.multiplyScalar(scale);
-
-  garment.userData.avatarScaleApplied = true;
-  garment.userData.uniformScale = scale;
-
-  garment.updateMatrix();
-  garment.updateMatrixWorld(true);
-
-  return scale;
-}
-
-// ============================================================
-// POSICIONAMENTO ANATÔMICO
-// ============================================================
-
-function positionGarmentOnAvatar(
-  garment: Object3D,
-  fitData: AvatarFitData,
-): boolean {
-  garment.updateMatrixWorld(true);
-
-  const garmentBox = new THREE.Box3().setFromObject(
-    garment,
-  );
-
-  if (garmentBox.isEmpty()) {
-    console.warn(
-      'Modelo de roupa sem geometria válida.',
-    );
-
-    return false;
-  }
-
-  const garmentSize = new THREE.Vector3();
-
-  garmentBox.getSize(garmentSize);
-
-  if (
-    !Number.isFinite(garmentSize.y) ||
-    garmentSize.y <= 0
-  ) {
-    console.warn(
-      'Altura inválida do modelo de roupa.',
-    );
-
-    return false;
-  }
-
-  const garmentType = getGarmentType(garment);
-
-  let verticalAnchor: THREE.Vector3 | null = null;
-  let horizontalAnchor: THREE.Vector3 | null = null;
-  let depthAnchor: THREE.Vector3 | null = null;
-
-  let forwardOffset = CLOTHING_FORWARD_OFFSET;
-
-  if (garmentType === 'tshirt') {
-    verticalAnchor = getLandmark(
-      fitData,
-      ['neckBase', 'shoulderCenter'],
-    );
-
-    horizontalAnchor = getLandmark(
-      fitData,
-      ['shoulderCenter', 'neckBase'],
-    );
-
-    depthAnchor = getLandmark(
-      fitData,
-      ['bustCenter', 'shoulderCenter', 'bodyCenter'],
-    );
-  } else if (
-    garmentType === 'short' ||
-    garmentType === 'pants'
-  ) {
-    verticalAnchor = getLandmark(
-      fitData,
-      ['waistCenter', 'hipCenter'],
-    );
-
-    horizontalAnchor = getLandmark(
-      fitData,
-      ['hipCenter', 'waistCenter'],
-    );
-
-    depthAnchor = getLandmark(
-      fitData,
-      ['hipCenter', 'crotchCenter', 'waistCenter'],
-    );
-
-    forwardOffset = 0.025;
-  } else if (garmentType === 'dress') {
-    verticalAnchor = getLandmark(
-      fitData,
-      ['neckBase', 'shoulderCenter'],
-    );
-
-    horizontalAnchor = getLandmark(
-      fitData,
-      ['shoulderCenter', 'neckBase'],
-    );
-
-    depthAnchor = getLandmark(
-      fitData,
-      ['bustCenter', 'bodyCenter'],
-    );
-  } else {
-    console.warn(
-      'Tipo de roupa não reconhecido:',
-      garmentType,
-    );
-
-    return false;
-  }
-
-  if (
-    !verticalAnchor ||
-    !horizontalAnchor ||
-    !depthAnchor
-  ) {
-    console.warn(
-      'Landmarks insuficientes para posicionar a roupa.',
-      {
-        garmentType,
-        availableLandmarks: Object.keys(
-          fitData.landmarks,
-        ),
-      },
-    );
-
-    return false;
-  }
-
-  // ----------------------------------------------------------
-  // CORREÇÃO DA ALTURA DA CAMISETA
-  // ----------------------------------------------------------
-  // O topo da bounding box não corresponde necessariamente
-  // à linha da gola, pois pode incluir mangas e ombros.
-  //
-  // Elevamos a camiseta em uma pequena proporção da altura
-  // do avatar para aproximar a região superior da gola.
-  //
-  // A correção não modifica a geometria da peça.
-  // ----------------------------------------------------------
-
-  const verticalCorrection =
-    garmentType === 'tshirt'
-      ? fitData.size.y * TSHIRT_VERTICAL_OFFSET_RATIO
-      : 0;
-
-  const targetPosition = new THREE.Vector3(
-    horizontalAnchor.x,
-    verticalAnchor.y + verticalCorrection,
-    depthAnchor.z,
-  );
-
-  const currentPosition = new THREE.Vector3(
-    (garmentBox.min.x + garmentBox.max.x) / 2,
-    garmentBox.max.y,
-    (garmentBox.min.z + garmentBox.max.z) / 2,
-  );
-
-  const translation = targetPosition.sub(
-    currentPosition,
-  );
-
-  translateObjectInWorld(
-    garment,
-    translation,
-  );
-
-  translateObjectInWorld(
-    garment,
-    new THREE.Vector3(
-      0,
-      0,
-      forwardOffset,
-    ),
-  );
-
-  garment.updateMatrix();
-  garment.updateMatrixWorld(true);
-
-  const finalBox = new THREE.Box3().setFromObject(
-    garment,
-  );
-
-  garment.userData.avatarPositionApplied = true;
-  garment.userData.avatarPositionType = garmentType;
-  garment.userData.verticalCorrection = verticalCorrection;
-
-  console.log(
-    'ROUPA POSICIONADA NO AVATAR',
-    {
-      garmentType,
-      anchors: {
-        vertical: verticalAnchor.toArray(),
-        horizontal: horizontalAnchor.toArray(),
-        depth: depthAnchor.toArray(),
-      },
-      verticalCorrection,
-      verticalCorrectionRatio:
-        garmentType === 'tshirt'
-          ? TSHIRT_VERTICAL_OFFSET_RATIO
-          : 0,
-      forwardOffset,
-      garmentSize: garmentSize.toArray(),
-      finalPosition: garment.position.toArray(),
-      finalBounds: {
-        min: finalBox.min.toArray(),
-        max: finalBox.max.toArray(),
-      },
-    },
-  );
-
-  return true;
-}
-
-// ============================================================
-// PREPARAÇÃO DO MODELO 3D
-// ============================================================
-
-function prepareObjectForRendering(
-  object: Object3D,
-): void {
-  object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) {
       return;
     }
@@ -1079,70 +135,141 @@ function prepareObjectForRendering(
     child.frustumCulled = true;
   });
 
-  object.updateMatrixWorld(true);
+  avatar.updateMatrixWorld(true);
 }
 
 // ============================================================
-// CLONAGEM DO MODELO
+// NORMALIZAÇÃO INDEPENDENTE DO AVATAR
 // ============================================================
 
-function cloneGarment(
-  original: Object3D,
-): Object3D {
-  const cloned = original.clone(true);
+function normalizeAvatar(
+  originalModel: Object3D,
+): {
+  group: THREE.Group;
+  unitScale: number;
+  modelScale: number;
+  size: THREE.Vector3;
+} {
+  const group = new THREE.Group();
 
-  cloned.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
+  const model = originalModel.clone(true);
 
-    child.geometry = child.geometry.clone();
-  });
+  group.add(model);
 
-  prepareObjectForRendering(cloned);
+  // Atualiza as transformações antes de calcular dimensões.
+  group.updateMatrixWorld(true);
 
-  return cloned;
+  const initialBox = new THREE.Box3().setFromObject(group);
+
+  const initialSize = new THREE.Vector3();
+
+  initialBox.getSize(initialSize);
+
+  if (
+    !Number.isFinite(initialSize.x) ||
+    !Number.isFinite(initialSize.y) ||
+    !Number.isFinite(initialSize.z) ||
+    initialSize.y <= 0
+  ) {
+    throw new Error(
+      'CAIMENT: o avatar possui dimensões inválidas.',
+    );
+  }
+
+  // Converte a altura original para a referência de 3,4 m.
+  const modelScale =
+    AVATAR_TARGET_HEIGHT / initialSize.y;
+
+  model.scale.multiplyScalar(modelScale);
+
+  group.updateMatrixWorld(true);
+
+  // Recalcula os limites depois da escala.
+  const scaledBox = new THREE.Box3().setFromObject(group);
+
+  const scaledSize = new THREE.Vector3();
+
+  scaledBox.getSize(scaledSize);
+
+  // Centraliza horizontalmente.
+  const center = new THREE.Vector3();
+
+  scaledBox.getCenter(center);
+
+  group.position.x -= center.x;
+  group.position.z -= center.z;
+
+  // Posiciona os pés exatamente no chão.
+  group.position.y -= scaledBox.min.y;
+
+  group.updateMatrixWorld(true);
+
+  const finalBox = new THREE.Box3().setFromObject(group);
+
+  const finalSize = new THREE.Vector3();
+
+  finalBox.getSize(finalSize);
+
+  if (
+    !Number.isFinite(finalSize.x) ||
+    !Number.isFinite(finalSize.y) ||
+    !Number.isFinite(finalSize.z) ||
+    Math.abs(finalSize.y - AVATAR_TARGET_HEIGHT) > 0.01
+  ) {
+    throw new Error(
+      'CAIMENT: falha ao normalizar a escala do avatar.',
+    );
+  }
+
+  return {
+    group,
+    unitScale: modelScale,
+    modelScale,
+    size: finalSize,
+  };
 }
 
 // ============================================================
-// LIBERAÇÃO DAS GEOMETRIAS DA ROUPA
-// ============================================================
-
-function disposeGarmentGeometries(
-  garment: Object3D,
-): void {
-  garment.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-
-    child.geometry.dispose();
-  });
-}
-
-// ============================================================
-// CARREGAMENTO DO AVATAR
+// URL DO MODELO
 // ============================================================
 
 function getModelProxyUrl(
-  modelUrl: string,
+  modelUrl?: string | null,
+  taskId?: string | null,
 ): string {
-  return `/api/avatar/model?url=${encodeURIComponent(modelUrl)}`;
+  if (taskId?.trim()) {
+    return `/api/avatar/model?taskId=${encodeURIComponent(
+      taskId.trim(),
+    )}`;
+  }
+
+  if (modelUrl?.trim()) {
+    return `/api/avatar/model?url=${encodeURIComponent(
+      modelUrl.trim(),
+    )}`;
+  }
+
+  throw new Error(
+    'CAIMENT: informe o taskId ou a URL do modelo do avatar.',
+  );
 }
+
+// ============================================================
+// CARREGAMENTO DO AVATAR TRIPO
+// ============================================================
 
 function RealModel({
   url,
+  taskId,
   onLoaded,
   onError,
-  onFitData,
 }: {
-  url: string;
+  url?: string | null;
+  taskId?: string | null;
   onLoaded?: () => void;
   onError?: (error: unknown) => void;
-  onFitData?: (data: AvatarFitData) => void;
 }) {
-  const [model, setModel] =
-    useState<Object3D | null>(null);
+  const [model, setModel] = useState<Object3D | null>(null);
 
   const errorRef = useRef(onError);
 
@@ -1155,10 +282,26 @@ function RealModel({
 
     setModel(null);
 
+    if (!taskId?.trim() && !url?.trim()) {
+      errorRef.current?.(
+        new Error('Avatar sem taskId ou URL de modelo.'),
+      );
+
+      return;
+    }
+
     const loader = new GLTFLoader();
 
+    const proxyUrl = getModelProxyUrl(url, taskId);
+
+    console.log('CARREGANDO SOMENTE O AVATAR TRIPO:', {
+      method: taskId?.trim() ? 'taskId' : 'modelUrl',
+      taskId: taskId ?? null,
+      proxyUrl,
+    });
+
     loader.load(
-      getModelProxyUrl(url),
+      proxyUrl,
 
       (gltf) => {
         const avatar = gltf.scene;
@@ -1177,15 +320,13 @@ function RealModel({
 
         if (meshCount === 0) {
           errorRef.current?.(
-            new Error(
-              'O modelo Tripo não possui meshes.',
-            ),
+            new Error('O modelo Tripo não possui meshes.'),
           );
 
           return;
         }
 
-        prepareObjectForRendering(avatar);
+        prepareAvatarForRendering(avatar);
 
         setModel(avatar);
       },
@@ -1195,7 +336,7 @@ function RealModel({
       (error) => {
         if (!cancelled) {
           console.error(
-            'Erro ao carregar avatar:',
+            'ERRO AO CARREGAR AVATAR TRIPO:',
             error,
           );
 
@@ -1207,7 +348,7 @@ function RealModel({
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [url, taskId]);
 
   if (!model) {
     return null;
@@ -1216,7 +357,6 @@ function RealModel({
   return (
     <AvatarModelObject
       model={model}
-      onFitData={onFitData}
       onLoaded={onLoaded}
       onError={onError}
     />
@@ -1224,24 +364,20 @@ function RealModel({
 }
 
 // ============================================================
-// NORMALIZAÇÃO DO AVATAR
+// NORMALIZAÇÃO E EXIBIÇÃO
 // ============================================================
 
 function AvatarModelObject({
   model,
-  onFitData,
   onLoaded,
   onError,
 }: {
   model: Object3D;
-  onFitData?: (data: AvatarFitData) => void;
   onLoaded?: () => void;
   onError?: (error: unknown) => void;
 }) {
-  const [
-    normalizedAvatar,
-    setNormalizedAvatar,
-  ] = useState<Object3D | null>(null);
+  const [normalizedAvatar, setNormalizedAvatar] =
+    useState<THREE.Group | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1249,6 +385,7 @@ function AvatarModelObject({
     setNormalizedAvatar(null);
 
     try {
+      // Orientação original do modelo Tripo.
       model.rotation.set(
         0,
         AVATAR_ROTATION_Y,
@@ -1257,46 +394,33 @@ function AvatarModelObject({
 
       model.updateMatrixWorld(true);
 
-      const normalized =
-        normalizeAvatarCoordinateSystem(
-          model,
-          {
-            targetHeight: AVATAR_TARGET_HEIGHT,
-            centerHorizontally: true,
-            placeOnGround: true,
-          },
-        );
+      // Normalização independente da pasta clothing.
+      const normalized = normalizeAvatar(model);
 
       normalized.group.updateMatrixWorld(true);
-
-      const fitData = extractAvatarFitData(
-        normalized.group,
-      );
 
       if (cancelled) {
         return;
       }
 
+      prepareAvatarForRendering(normalized.group);
+
       setNormalizedAvatar(normalized.group);
 
-      onFitData?.(fitData);
-      onLoaded?.();
+      console.log('AVATAR TRIPO NORMALIZADO:', {
+        targetHeight: AVATAR_TARGET_HEIGHT,
+        unitScale: normalized.unitScale,
+        modelScale: normalized.modelScale,
+        size: normalized.size.toArray(),
+        floorY: 0,
+        forwardDirection: '+Z',
+      });
 
-      console.log(
-        'AVATAR NORMALIZADO',
-        {
-          targetHeight: AVATAR_TARGET_HEIGHT,
-          unitScale: normalized.unitScale,
-          modelScale: normalized.modelScale,
-          size: normalized.size.toArray(),
-          center: normalized.center.toArray(),
-          floorY: normalized.bounds.min.y,
-        },
-      );
+      onLoaded?.();
     } catch (error) {
       if (!cancelled) {
         console.error(
-          'Erro na normalização do avatar:',
+          'ERRO NA NORMALIZAÇÃO DO AVATAR:',
           error,
         );
 
@@ -1309,7 +433,6 @@ function AvatarModelObject({
     };
   }, [
     model,
-    onFitData,
     onLoaded,
     onError,
   ]);
@@ -1324,282 +447,22 @@ function AvatarModelObject({
 }
 
 // ============================================================
-// CARREGAMENTO DIRETO DA ROUPA
-// ============================================================
-
-function ClothingModel({
-  clothingModelUrl,
-  clothingObject,
-  measurements,
-  avatarFitData,
-}: {
-  clothingModelUrl?: string | null;
-  clothingObject?: Object3D | null;
-  measurements?: unknown;
-  avatarFitData: AvatarFitData;
-}) {
-  const [garment, setGarment] =
-    useState<Object3D | null>(null);
-
-  const [loading, setLoading] =
-    useState(false);
-
-  const [error, setError] =
-    useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (garment) {
-        disposeGarmentGeometries(garment);
-      }
-    };
-  }, [garment]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    setGarment(null);
-    setError(null);
-
-    if (!clothingModelUrl && !clothingObject) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-
-    const processGarment = (
-      original: Object3D,
-      source: string,
-    ) => {
-      try {
-        if (cancelled) {
-          return;
-        }
-
-        console.log(
-          'MODELO 3D DE ROUPA RECEBIDO:',
-          {
-            source,
-            original,
-          },
-        );
-
-        const generated = cloneGarment(original);
-
-        if (
-          !generated.userData.garmentType &&
-          clothingModelUrl
-        ) {
-          const type = getGarmentTypeFromUrl(
-            clothingModelUrl,
-          );
-
-          if (type) {
-            generated.userData.garmentType = type;
-          }
-        }
-
-        const uniformScale = applyGarmentScale(
-          generated,
-          measurements,
-        );
-
-        const positioned = positionGarmentOnAvatar(
-          generated,
-          avatarFitData,
-        );
-
-        generated.userData.isImportedGarment = true;
-
-        generated.userData.collisionCorrectionApplied =
-          false;
-
-        generated.userData.collisionMeshesProcessed = 0;
-        generated.userData.collisionMeshesSkipped = 0;
-
-        generated.updateMatrixWorld(true);
-
-        if (cancelled) {
-          disposeGarmentGeometries(generated);
-          return;
-        }
-
-        setGarment(generated);
-        setLoading(false);
-
-        console.log(
-          'ROUPA IMPORTADA E POSICIONADA:',
-          {
-            source,
-            object: generated,
-            uniformScale,
-            positioned,
-            position: generated.position.toArray(),
-            rotation: generated.rotation.toArray(),
-            scale: generated.scale.toArray(),
-            garmentType: getGarmentType(generated),
-            children: generated.children.length,
-          },
-        );
-      } catch (processingError) {
-        console.error(
-          'Erro ao preparar a roupa:',
-          processingError,
-        );
-
-        if (!cancelled) {
-          setError(
-            processingError instanceof Error
-              ? processingError.message
-              : 'Não foi possível preparar a roupa.',
-          );
-
-          setLoading(false);
-        }
-      }
-    };
-
-    if (clothingObject && !clothingModelUrl) {
-      processGarment(
-        clothingObject,
-        'clothingObject',
-      );
-
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (clothingModelUrl) {
-      const loader = new GLTFLoader();
-
-      console.log(
-        'CARREGANDO ROUPA IMPORTADA:',
-        clothingModelUrl,
-      );
-
-      loader.load(
-        clothingModelUrl,
-
-        (gltf) => {
-          if (cancelled) {
-            return;
-          }
-
-          const original = gltf.scene;
-
-          let meshCount = 0;
-
-          original.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-              meshCount++;
-            }
-          });
-
-          if (meshCount === 0) {
-            setError(
-              'O arquivo da roupa não contém meshes.',
-            );
-
-            setLoading(false);
-            return;
-          }
-
-          processGarment(
-            original,
-            clothingModelUrl,
-          );
-        },
-
-        undefined,
-
-        (loadError) => {
-          if (cancelled) {
-            return;
-          }
-
-          console.error(
-            'ERRO AO CARREGAR ROUPA 3D:',
-            {
-              url: clothingModelUrl,
-              error: loadError,
-            },
-          );
-
-          setError(
-            `Não foi possível carregar a roupa: ${clothingModelUrl}`,
-          );
-
-          setLoading(false);
-        },
-      );
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    clothingModelUrl,
-    clothingObject,
-    measurements,
-    avatarFitData,
-  ]);
-
-  if (loading) {
-    return null;
-  }
-
-  if (error) {
-    console.error(
-      'FALHA NO MODELO DE ROUPA:',
-      error,
-    );
-
-    return null;
-  }
-
-  if (!garment) {
-    return null;
-  }
-
-  return (
-    <primitive
-      object={garment}
-      dispose={null}
-    />
-  );
-}
-
-// ============================================================
 // CENA 3D
 // ============================================================
 
 function Scene({
   modelUrl,
-  clothingModelUrl,
-  clothingObject,
-  measurements,
+  taskId,
   onAvatarLoaded,
   onAvatarError,
 }: {
   modelUrl?: string | null;
-  clothingModelUrl?: string | null;
-  clothingObject?: Object3D | null;
-  measurements?: unknown;
+  taskId?: string | null;
   onAvatarLoaded: () => void;
   onAvatarError: () => void;
 }) {
-  const [
-    avatarFitData,
-    setAvatarFitData,
-  ] = useState<AvatarFitData | null>(null);
-
-  const handleFitData = useCallback(
-    (data: AvatarFitData) => {
-      setAvatarFitData(data);
-    },
-    [],
+  const hasAvatarSource = Boolean(
+    taskId?.trim() || modelUrl?.trim(),
   );
 
   const handleLoaded = useCallback(() => {
@@ -1607,22 +470,13 @@ function Scene({
   }, [onAvatarLoaded]);
 
   const handleError = useCallback(() => {
-    setAvatarFitData(null);
     onAvatarError();
   }, [onAvatarError]);
-
-  useEffect(() => {
-    setAvatarFitData(null);
-  }, [modelUrl]);
 
   return (
     <>
       <hemisphereLight
-        args={[
-          '#F4F1FC',
-          '#6E42D1',
-          0.55,
-        ]}
+        args={['#F4F1FC', '#6E42D1', 0.55]}
       />
 
       <ambientLight intensity={0.65} />
@@ -1644,24 +498,15 @@ function Scene({
       />
 
       <Suspense fallback={null}>
-        {modelUrl ? (
+        {hasAvatarSource ? (
           <RealModel
             url={modelUrl}
+            taskId={taskId}
             onLoaded={handleLoaded}
             onError={handleError}
-            onFitData={handleFitData}
           />
         ) : (
           <AvatarPlaceholderModel />
-        )}
-
-        {avatarFitData && (
-          <ClothingModel
-            clothingModelUrl={clothingModelUrl}
-            clothingObject={clothingObject}
-            measurements={measurements}
-            avatarFitData={avatarFitData}
-          />
         )}
       </Suspense>
     </>
@@ -1676,13 +521,8 @@ function CameraController() {
   const { camera } = useThree();
 
   useEffect(() => {
-    camera.position.set(
-      ...CAMERA_POSITION,
-    );
-
-    camera.lookAt(
-      ...CAMERA_TARGET,
-    );
+    camera.position.set(...CAMERA_POSITION);
+    camera.lookAt(...CAMERA_TARGET);
   }, [camera]);
 
   return null;
@@ -1694,39 +534,28 @@ function CameraController() {
 
 export function AvatarViewer({
   modelUrl,
-  clothingModelUrl,
-  clothingObject,
-  measurements,
+  taskId,
   className,
   showControls = true,
 }: AvatarViewerProps) {
-  const controlsRef =
-    useRef<OrbitControlsImpl | null>(null);
+  const controlsRef = useRef<OrbitControlsImpl | null>(null);
 
-  const [ready, setReady] =
-    useState(!modelUrl);
+  const hasAvatarSource = Boolean(
+    taskId?.trim() || modelUrl?.trim(),
+  );
 
-  const [modelError, setModelError] =
-    useState(false);
+  const [ready, setReady] = useState(!hasAvatarSource);
+
+  const [modelError, setModelError] = useState(false);
 
   useEffect(() => {
     setModelError(false);
-    setReady(!modelUrl);
-  }, [modelUrl]);
-
-  // IMPORTANTE:
-  // Não existe mais uma roupa padrão.
-  //
-  // O Viewer só carrega uma roupa quando o componente
-  // pai informa explicitamente clothingModelUrl.
-  //
-  // Se clothingModelUrl for null ou undefined,
-  // nenhuma roupa será carregada.
-  //
-  // clothingObject continua tendo suporte independente.
-
-  const resolvedClothingModelUrl =
-    clothingModelUrl ?? null;
+    setReady(!hasAvatarSource);
+  }, [
+    modelUrl,
+    taskId,
+    hasAvatarSource,
+  ]);
 
   const handleAvatarLoaded = useCallback(() => {
     setReady(true);
@@ -1742,6 +571,7 @@ export function AvatarViewer({
     setModelError(true);
   }, []);
 
+  // Restaura a posição inicial da câmera.
   const handleReset = () => {
     const controls = controlsRef.current;
 
@@ -1749,20 +579,15 @@ export function AvatarViewer({
       return;
     }
 
-    controls.object.position.set(
-      ...CAMERA_POSITION,
-    );
+    controls.object.position.set(...CAMERA_POSITION);
 
-    controls.target.set(
-      ...CAMERA_TARGET,
-    );
+    controls.target.set(...CAMERA_TARGET);
 
     controls.update();
   };
 
-  const handleZoom = (
-    direction: 1 | -1,
-  ) => {
+  // Controla o zoom.
+  const handleZoom = (direction: 1 | -1) => {
     const controls = controlsRef.current;
 
     if (!controls) {
@@ -1771,10 +596,7 @@ export function AvatarViewer({
 
     const camera = controls.object;
 
-    const factor =
-      direction === 1
-        ? 0.85
-        : 1.15;
+    const factor = direction === 1 ? 0.85 : 1.15;
 
     camera.position
       .sub(controls.target)
@@ -1839,9 +661,7 @@ export function AvatarViewer({
 
             <Scene
               modelUrl={modelUrl}
-              clothingModelUrl={resolvedClothingModelUrl}
-              clothingObject={clothingObject}
-              measurements={measurements}
+              taskId={taskId}
               onAvatarLoaded={handleAvatarLoaded}
               onAvatarError={handleAvatarError}
             />

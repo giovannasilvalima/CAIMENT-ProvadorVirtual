@@ -43,9 +43,6 @@ type CatalogProduct = {
   price: number;
   description: string;
 
-  // Opcional: o catálogo não precisa ser alterado.
-  clothingModel?: string;
-
   images: {
     front: string;
     back: string;
@@ -84,39 +81,6 @@ type ProductCatalog = {
 const catalog = productCatalogRaw as ProductCatalog;
 
 // ============================================================
-// MODELOS 3D — MAPEAMENTO SEPARADO DO CATÁLOGO
-// ============================================================
-
-// Cadastre aqui o caminho público de cada arquivo GLB.
-// A chave deve ser o ID do produto existente no products.json.
-//
-// Exemplo:
-// '1': '/models/clothes/camiseta-essential.glb'
-
-const CLOTHING_MODELS_BY_PRODUCT_ID: Record<string, string> = {
-  '1': '/models/clothes/camisa-polo-fuenza.glb',
-
-  // Adicione os demais produtos usando seus IDs e caminhos reais:
-  // '2': '/models/clothes/arquivo-real-short.glb',
-  // '3': '/models/clothes/arquivo-real-vestido.glb',
-  // '4': '/models/clothes/arquivo-real-calca.glb',
-};
-
-function getClothingModel(product: CatalogProduct): string {
-  const clothingModel =
-    CLOTHING_MODELS_BY_PRODUCT_ID[String(product.id)]?.trim() ||
-    product.clothingModel?.trim();
-
-  if (!clothingModel) {
-    throw new Error(
-      `O produto "${product.name}" (ID ${product.id}) ainda não possui um arquivo GLB cadastrado.`,
-    );
-  }
-
-  return clothingModel;
-}
-
-// ============================================================
 // CONTRATO DE INTEGRAÇÃO COM O CAIMENT
 // ============================================================
 
@@ -134,9 +98,6 @@ type CaimentProductPayload = {
   categoryLabel: string;
   price: number;
   image: string;
-
-  // Obrigatório no payload enviado ao CAIMENT.
-  clothingModel: string;
 
   size: string;
   color: string;
@@ -216,44 +177,8 @@ function getGarmentCategory(
 
     default:
       throw new Error(
-        `Perfil de geometria não reconhecido: ${product.model.geometryProfile}.`,
+        `Perfil de produto não reconhecido: ${product.model.geometryProfile}.`,
       );
-  }
-}
-
-// ============================================================
-// VALIDAÇÃO DO CAMINHO DO MODELO 3D
-// ============================================================
-
-function validateClothingModelPath(
-  clothingModel: unknown,
-  productName: string,
-): asserts clothingModel is string {
-  if (
-    typeof clothingModel !== 'string' ||
-    clothingModel.trim().length === 0
-  ) {
-    throw new Error(
-      `O produto "${productName}" não possui um caminho de modelo 3D cadastrado.`,
-    );
-  }
-
-  const isLocalPath =
-    clothingModel.startsWith('/models/');
-
-  const isExternalUrl =
-    /^https?:\/\/.+/i.test(clothingModel);
-
-  if (!isLocalPath && !isExternalUrl) {
-    throw new Error(
-      `O caminho do modelo 3D de "${productName}" é inválido: ${clothingModel}. Informe um caminho público em /models/ ou uma URL HTTP/HTTPS.`,
-    );
-  }
-
-  if (/\s/.test(clothingModel)) {
-    throw new Error(
-      `O caminho do modelo 3D de "${productName}" contém espaços.`,
-    );
   }
 }
 
@@ -296,6 +221,12 @@ function validateCatalogStructure() {
     if (!Array.isArray(item.sizes) || item.sizes.length === 0) {
       throw new Error(
         `O produto "${item.name}" não possui tamanhos cadastrados.`,
+      );
+    }
+
+    if (!Array.isArray(item.colors) || item.colors.length === 0) {
+      throw new Error(
+        `O produto "${item.name}" não possui cores cadastradas.`,
       );
     }
   }
@@ -635,16 +566,6 @@ export default function FitsenseProductPage() {
         product.catalogProduct,
       );
 
-      // Obtém o GLB pelo mapeamento separado do catálogo.
-      const clothingModel = getClothingModel(
-        product.catalogProduct,
-      );
-
-      validateClothingModelPath(
-        clothingModel,
-        product.name,
-      );
-
       const referenceSize =
         selectedSize ?? getReferenceSize(product);
 
@@ -672,8 +593,6 @@ export default function FitsenseProductPage() {
         price: product.price,
         image: product.image,
 
-        clothingModel,
-
         size: referenceSize,
         color: selectedProductColor.name,
 
@@ -689,8 +608,18 @@ export default function FitsenseProductPage() {
       };
 
       console.log(
-        '[FITSENSE] Arquivo 3D enviado:',
-        selectedProduct.clothingModel,
+        '[FITSENSE] Produto preparado para recomendação:',
+        selectedProduct.name,
+      );
+
+      console.log(
+        '[FITSENSE] Medidas do tamanho de referência:',
+        selectedProduct.measurements,
+      );
+
+      console.log(
+        '[FITSENSE] Medidas de todos os tamanhos:',
+        selectedProduct.sizes,
       );
 
       return selectedProduct;
@@ -783,7 +712,7 @@ export default function FitsenseProductPage() {
   }
 
   // ==========================================================
-  // EXPERIMENTAR NO CAIMENT
+  // ENVIAR AO CAIMENT
   // ==========================================================
 
   async function handleTryOn() {
@@ -838,11 +767,6 @@ export default function FitsenseProductPage() {
       console.log(
         'Produto recebido pelo backend do CAIMENT:',
         responseData.data,
-      );
-
-      console.log(
-        '[FITSENSE] Arquivo 3D:',
-        selectedProduct.clothingModel,
       );
 
       console.log(
@@ -1057,14 +981,14 @@ export default function FitsenseProductPage() {
 
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold">
-                  Tamanho de referência
+                  Tamanho
                 </p>
 
                 <button
                   type="button"
                   onClick={() => {
                     alert(
-                      'Consulte as medidas disponíveis na descrição técnica do produto.',
+                      'As medidas técnicas de cada tamanho estão cadastradas no catálogo FitSense e serão utilizadas pelo CAIMENT para calcular a recomendação.',
                     );
                   }}
                   className="flex items-center gap-1.5 text-xs font-medium text-black/50 transition hover:text-black"
@@ -1075,9 +999,9 @@ export default function FitsenseProductPage() {
               </div>
 
               <p className="mt-1 text-xs leading-5 text-black/45">
-                Opcional para experimentar no CAIMENT. Para comprar,
-                selecione um tamanho. A recomendação será calculada
-                pelo CAIMENT com as medidas de todos os tamanhos.
+                Selecione um tamanho para comprar. O CAIMENT também
+                poderá comparar suas medidas com todos os tamanhos
+                disponíveis e recomendar o mais compatível.
               </p>
 
               <div className="mt-4 grid grid-cols-5 gap-2">
@@ -1108,8 +1032,9 @@ export default function FitsenseProductPage() {
 
               {!selectedSize && (
                 <p className="mt-2 text-xs text-black/45">
-                  Nenhum tamanho selecionado. Será utilizado um tamanho
-                  intermediário somente como referência para a geometria.
+                  Nenhum tamanho selecionado. O CAIMENT utilizará
+                  um tamanho intermediário como referência inicial,
+                  sem limitar a recomendação aos demais tamanhos.
                 </p>
               )}
 
@@ -1132,7 +1057,7 @@ export default function FitsenseProductPage() {
                 <span>
                   {isSendingToCaiment
                     ? 'Conectando ao CAIMENT...'
-                    : 'Experimentar no CAIMENT'}
+                    : 'Ver meu tamanho no CAIMENT'}
                 </span>
 
                 {!isSendingToCaiment && (
@@ -1169,13 +1094,14 @@ export default function FitsenseProductPage() {
 
                 <div>
                   <p className="text-sm font-semibold text-[#341A6E]">
-                    Experimente virtualmente
+                    Seu avatar e tamanho ideal
                   </p>
 
                   <p className="mt-1 text-xs leading-5 text-[#6E6580]">
-                    Veja esta peça no seu avatar 3D através do provador
-                    virtual CAIMENT e confira a recomendação de tamanho
-                    baseada nas suas medidas.
+                    Visualize seu avatar personalizado e descubra
+                    qual tamanho combina melhor com suas medidas
+                    corporais. O CAIMENT compara suas medidas com
+                    as dimensões técnicas fornecidas pela FitSense.
                   </p>
                 </div>
 
