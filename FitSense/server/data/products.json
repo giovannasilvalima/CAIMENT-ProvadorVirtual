@@ -341,8 +341,8 @@
       },
       "colors": [
         {
-          "name": "Roxo",
-          "hex": "#9254E1"
+          "name": "Branco",
+          "hex": "##FFFFFF"
         }
       ],
       "material": {
