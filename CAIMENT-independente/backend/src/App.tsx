@@ -14,6 +14,9 @@ import RegisterPage from '@/pages/Register/RegisterPage';
 import VerificationPage from '@/pages/Register/VerificationPage';
 import RegisterMeasurementsPage from '@/pages/RegisterMeasurements/RegisterMeasurementsPage';
 
+import PoliciesPage from '@/pages/Policies/PoliciesPage';
+import HelpPage from '@/pages/Help/HelpPage';
+
 import OnboardingWelcomePage from '@/pages/Onboarding/OnboardingWelcomePage';
 import OnboardingAdjustPage from '@/pages/Onboarding/OnboardingAdjustPage';
 
@@ -41,7 +44,7 @@ export default function App() {
                 element={<Navigate to="/login" replace />}
               />
 
-              {/* CAIMENT — CONTA E EXPERIÊNCIA */}
+              {/* CONTA E AUTENTICAÇÃO */}
 
               <Route
                 path="/login"
@@ -63,6 +66,20 @@ export default function App() {
                 element={<VerificationPage />}
               />
 
+              {/* PÁGINAS PÚBLICAS */}
+
+              <Route
+                path="/politicas"
+                element={<PoliciesPage />}
+              />
+
+              <Route
+                path="/ajuda"
+                element={<HelpPage />}
+              />
+
+              {/* ONBOARDING */}
+
               <Route
                 path="/onboarding"
                 element={<OnboardingWelcomePage />}
@@ -72,6 +89,8 @@ export default function App() {
                 path="/onboarding/ajuste"
                 element={<OnboardingAdjustPage />}
               />
+
+              {/* ÁREA PRINCIPAL */}
 
               <Route
                 path="/dashboard"
@@ -108,7 +127,8 @@ export default function App() {
                 element={<SettingsPage />}
               />
 
-              {/* Rota não encontrada */}
+              {/* ROTA NÃO ENCONTRADA */}
+
               <Route
                 path="*"
                 element={<Navigate to="/login" replace />}
